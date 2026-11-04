@@ -33,6 +33,7 @@ from src.fields import register_field, list_fields, get_field, FieldError, CROPS
 from src.config import load_environment
 from src.demo_data import generate_synthetic_bands
 from src.fetch_sentinel import SentinelHubConfigError, fetch_field_bands
+from src.geometry import LOW_QUALITY_PIXEL_RATIO, MIN_VALID_PIXEL_RATIO, prepare_bands
 from src.logging_config import setup_logging, get_logger
 from src.main import run_pipeline
 from src.zoning import get_thresholds
@@ -366,6 +367,25 @@ def api_create_analysis(
         except Exception as exc:
             logger.error("échec de récupération Sentinel", extra={"field_id": field_id, "reason": str(exc)})
             _raise_api_error(502, "sentinel_request_error", f"Impossible de récupérer les données Sentinel : {exc}")
+    field_bbox = (
+        field["bbox_min_lon"],
+        field["bbox_min_lat"],
+        field["bbox_max_lon"],
+        field["bbox_max_lat"],
+    )
+    try:
+        # ne garde que l'intérieur du contour réel de la parcelle (et mesure la
+        # part de pixels exploitables : hors contour, hors nuages)
+        bands, valid_ratio = prepare_bands(bands, field_bbox, field.get("polygon"))
+    except ValueError as exc:
+        _raise_api_error(422, "analysis_error", str(exc))
+    if valid_ratio < MIN_VALID_PIXEL_RATIO:
+        _raise_api_error(
+            422,
+            "analysis_error",
+            f"Image inexploitable : seulement {valid_ratio:.0%} de la parcelle est visible "
+            "(nuages, ombres ou absence de données). Essayez une autre date.",
+        )
     try:
         result, _ = run_pipeline(
             bands,
@@ -386,6 +406,11 @@ def api_create_analysis(
             f"Impossible de calculer l'analyse (image probablement inexploitable, ex: entièrement masquée) : {exc}",
         )
     result["field_id"] = field_id
+    result["data_quality"] = {
+        "valid_pixel_ratio": round(valid_ratio, 3),
+        "polygon_applied": bool(field.get("polygon")),
+        "low_quality": valid_ratio < LOW_QUALITY_PIXEL_RATIO,
+    }
     logger.info(
         "analyse créée",
         extra={

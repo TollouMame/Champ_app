@@ -15,7 +15,7 @@ from pathlib import Path
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Depends, Header, Request
+from fastapi import FastAPI, HTTPException, Depends, Header, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,7 +27,7 @@ from slowapi.util import get_remote_address
 from src import tokens as tokens_module
 from src.db import init_db
 from src.auth import register_user, authenticate_user, AuthError
-from src.analyses import save_analysis, list_analyses
+from src.analyses import save_analysis, list_analyses, count_analyses
 from src.treatments import save_treatment, list_treatments, TreatmentError
 from src.fields import register_field, list_fields, get_field, FieldError, CROPS_DISPONIBLES
 from src.config import load_environment
@@ -72,6 +72,19 @@ def get_auth_rate_limit() -> str:
     return os.environ.get("AUTH_RATE_LIMIT", "10/minute")
 
 
+def get_analysis_rate_limit() -> str:
+    """Limite de création d'analyses (coût CPU et quota Sentinel Hub). Format slowapi."""
+    return os.environ.get("ANALYSIS_RATE_LIMIT", "60/hour")
+
+
+def get_max_body_bytes() -> int:
+    return int(os.environ.get("MAX_BODY_BYTES", 1_000_000))
+
+
+# Nombre maximal d'analyses conservées par champ (stockage et coût Sentinel).
+MAX_ANALYSES_PER_FIELD = 200
+MIN_RESOLUTION_M = 10   # résolution native de Sentinel-2 : en dessous, on ne gagne rien et on coûte cher
+
 limiter = Limiter(key_func=get_remote_address)
 
 
@@ -93,6 +106,23 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Suivi de champs — API", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _handle_rate_limit_exceeded)
+
+
+@app.middleware("http")
+async def limit_body_size(request: Request, call_next):
+    """Refuse (413) une requête dont Content-Length dépasse MAX_BODY_BYTES (1 Mo par défaut).
+
+    Ne couvre pas les corps envoyés en chunked sans Content-Length : poser aussi
+    la limite sur le reverse proxy (ex. client_max_body_size 1m avec nginx).
+    """
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > get_max_body_bytes():
+        detail = "Requête trop volumineuse."
+        return JSONResponse(
+            status_code=413,
+            content={"detail": {"error": "payload_too_large", "detail": detail, "message": detail}},
+        )
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -323,7 +353,9 @@ def _get_owned_field(field_id: int, user_id: int) -> dict:
 
 
 @app.post("/fields/{field_id}/analyses")
+@limiter.limit(get_analysis_rate_limit)
 def api_create_analysis(
+    request: Request,
     field_id: int,
     payload: AnalysisRequest,
     user_id: int = Depends(get_current_user_id),
@@ -333,14 +365,25 @@ def api_create_analysis(
         _raise_api_error(422, "validation_error", "source doit être 'synthetic' ou 'sentinel'.")
     if payload.method not in ("grid", "kmeans"):
         _raise_api_error(422, "validation_error", "method doit être 'grid' ou 'kmeans'.")
-    if payload.n_rows < 1 or payload.n_cols < 1 or payload.n_zones < 1 or payload.resolution < 1:
+    if payload.n_rows < 1 or payload.n_cols < 1 or payload.n_zones < 1:
         _raise_api_error(422, "validation_error", "Les dimensions de zonage doivent être des entiers positifs.")
+    if payload.resolution < MIN_RESOLUTION_M:
+        _raise_api_error(
+            422, "validation_error", f"resolution ne peut pas être inférieure à {MIN_RESOLUTION_M} m (résolution native de Sentinel-2)."
+        )
     if payload.n_rows > 50 or payload.n_cols > 50:
         _raise_api_error(422, "validation_error", "n_rows et n_cols ne peuvent pas dépasser 50.")
     if payload.n_zones > 20:
         _raise_api_error(422, "validation_error", "n_zones ne peut pas dépasser 20.")
     if payload.resolution > 100:
         _raise_api_error(422, "validation_error", "resolution ne peut pas dépasser 100.")
+
+    if count_analyses(get_db_path(), field_id) >= MAX_ANALYSES_PER_FIELD:
+        _raise_api_error(
+            429,
+            "analysis_quota_exceeded",
+            f"Limite de {MAX_ANALYSES_PER_FIELD} analyses atteinte pour ce champ.",
+        )
 
     thresholds = {
         "critical": payload.critical_threshold,
@@ -366,7 +409,12 @@ def api_create_analysis(
             _raise_api_error(503, "sentinel_configuration_error", str(exc))
         except Exception as exc:
             logger.error("échec de récupération Sentinel", extra={"field_id": field_id, "reason": str(exc)})
-            _raise_api_error(502, "sentinel_request_error", f"Impossible de récupérer les données Sentinel : {exc}")
+            # le détail technique reste dans les logs ; le client reçoit un message générique
+            _raise_api_error(
+                502,
+                "sentinel_request_error",
+                "Impossible de récupérer l'image satellite pour le moment. Réessayez plus tard ou avec une autre date.",
+            )
     field_bbox = (
         field["bbox_min_lon"],
         field["bbox_min_lat"],
@@ -431,9 +479,14 @@ def api_create_analysis(
 
 
 @app.get("/fields/{field_id}/analyses")
-def api_list_analyses(field_id: int, user_id: int = Depends(get_current_user_id)):
+def api_list_analyses(
+    field_id: int,
+    limit: int = Query(20, ge=1, le=100, description="Nombre d'analyses renvoyées (les plus récentes d'abord)"),
+    offset: int = Query(0, ge=0),
+    user_id: int = Depends(get_current_user_id),
+):
     _get_owned_field(field_id, user_id)
-    return list_analyses(get_db_path(), field_id)
+    return list_analyses(get_db_path(), field_id, limit=limit, offset=offset)
 
 
 @app.post("/fields/{field_id}/treatments")

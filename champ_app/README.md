@@ -225,6 +225,35 @@ majeure tant que le cœur métier n'est pas pleinement stabilisé.
 - une évolution vers une vraie app native seulement si l'usage métier le
   justifie réellement
 
+## Fiabilité des analyses et limites d'usage
+
+**Ce qui est calculé, et sur quels pixels**
+- Seuls les pixels **à l'intérieur du contour** de la parcelle (`polygon`) sont
+  utilisés ; routes, voisins et bois de la bbox sont ignorés (`src/geometry.py`).
+- Les **nuages et ombres** sont exclus par la bande de classification `SCL` de
+  Sentinel-2 L2A (seules les classes 4 « végétation » et 5 « sol nu » sont
+  gardées). `dataMask` seul ne détecte pas les nuages. ⚠️ Non testé contre le vrai
+  service : à valider sur des images réelles.
+- Chaque analyse contient `result.data_quality` (`valid_pixel_ratio`,
+  `low_quality`). Sous 60 % de pixels exploitables l'analyse est signalée comme peu
+  fiable ; sous 20 % elle est refusée (422).
+- Les seuils `critical` / `warning` doivent être finis, compris entre -1 et 1, avec
+  `critical < warning`, et sont appliqués par les deux méthodes (grille et k-means).
+- ⚠️ Les seuils par défaut (0,35 / 0,55) sont uniques pour toutes les cultures et
+  tous les stades : **ils doivent être validés par un agronome** avant tout usage réel.
+
+**Limites (protection contre les abus et les coûts Sentinel Hub)**
+
+| Limite | Valeur | Réglage |
+|---|---|---|
+| Sommets d'un polygone | 500 | `MAX_POLYGON_VERTICES` (`fields.py`) |
+| Surface d'une parcelle / de son rectangle englobant | 1 000 ha / 4 000 ha | `MAX_FIELD_AREA_HA`, `MAX_BBOX_AREA_HA` |
+| Résolution minimale | 10 m (natif Sentinel-2) | `MIN_RESOLUTION_M` (`api.py`) |
+| Analyses par champ | 200 | `MAX_ANALYSES_PER_FIELD` |
+| Fréquence de création d'analyses | 60 par heure et par IP | variable `ANALYSIS_RATE_LIMIT` |
+| Taille d'une requête | 1 Mo (Content-Length) | variable `MAX_BODY_BYTES` ; à doubler sur le reverse proxy |
+| Liste des analyses | 20 par page (max 100) | paramètres `limit` et `offset` |
+
 ## Choix de sécurité à noter
 
 - Mots de passe hachés en PBKDF2-HMAC-SHA256 avec sel aléatoire (pas de

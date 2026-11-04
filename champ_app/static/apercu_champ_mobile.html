@@ -70,6 +70,17 @@
     border-bottom:1px solid var(--stress);
   }
   .demo-banner.show{ display:block; }
+  .quality-banner{
+    display:none;
+    background: var(--surface-raised);
+    color: var(--stress);
+    font-size:11px;
+    line-height:1.4;
+    text-align:center;
+    padding:7px 14px;
+    border-bottom:1px solid var(--line);
+  }
+  .quality-banner.show{ display:block; }
 
   .topbar{
     padding:16px 18px 12px 18px;
@@ -303,6 +314,7 @@
     Données simulées : cette carte ne reflète pas l'état réel de votre parcelle.
     Ne l'utilisez pas pour décider d'un traitement.
   </div>
+  <div class="quality-banner" id="quality-banner" role="status"></div>
 
   <!-- POSITION TAB -->
   <div class="screen" id="screen-position">
@@ -414,6 +426,7 @@ let currentCell = null;
 let currentAnalysisId = null;
 let isBlobMap = false;
 let dataSource = 'demo';
+let dataQuality = null;     // result.data_quality de l'analyse affichée (ratio de pixels exploitables)
 let analysisDate = null;   // date de l'analyse affichée (JJ/MM/AAAA), null en mode démo local
 
 function formatAnalysisDate(value){
@@ -431,6 +444,7 @@ function useAnalysis(analysis){
   isBlobMap = true;
   dataSource = analysis.source;
   analysisDate = formatAnalysisDate(analysis.created_at);
+  dataQuality = data.data_quality || null;
   const cr = Math.floor(labelGrid.rows/2), cc = Math.floor(labelGrid.cols/2);
   const idx = labelGrid.data[cr][cc];
   currentCell = idx >= 0 ? zones[idx] : zones.find(z => z.ndvi != null);
@@ -442,6 +456,7 @@ function useDemoData(){
   isBlobMap = false;
   dataSource = 'demo';
   analysisDate = null;
+  dataQuality = null;
   currentAnalysisId = null;
   currentCell = cells.find(c => c.x===3 && c.y===3) || cells[0];
 }
@@ -456,6 +471,16 @@ function updateSourceBadge(){
   badge.className = 'source-badge ' + (isSentinel ? 'live' : 'demo');
   const banner = document.getElementById('demo-banner');
   if(banner) banner.classList.toggle('show', !isSentinel);
+
+  const qualityBanner = document.getElementById('quality-banner');
+  if(qualityBanner){
+    const lowQuality = !!(dataQuality && dataQuality.low_quality);
+    qualityBanner.textContent = lowQuality
+      ? 'Image partiellement masquée (nuages, ombres) : seulement ' + Math.round(dataQuality.valid_pixel_ratio * 100)
+        + ' % de la parcelle est visible. Les zones affichées peuvent être peu représentatives.'
+      : '';
+    qualityBanner.classList.toggle('show', lowQuality);
+  }
 }
 
 async function loadFieldData(){
@@ -543,10 +568,15 @@ function recommendationFor(cell){
 }
 
 // ---- render position tab ----
+function formatIndex(value){
+  // les zones sans pixel valide (ou sans NDRE) ont une valeur null côté serveur
+  return typeof value === 'number' && isFinite(value) ? value.toFixed(2) : '—';
+}
+
 function renderPosition(){
   document.getElementById('pos-zone').textContent = currentCell.id;
-  document.getElementById('pos-ndvi').textContent = currentCell.ndvi.toFixed(2);
-  document.getElementById('pos-ndre').textContent = currentCell.ndre.toFixed(2);
+  document.getElementById('pos-ndvi').textContent = formatIndex(currentCell.ndvi);
+  document.getElementById('pos-ndre').textContent = formatIndex(currentCell.ndre);
   document.getElementById('pos-moist').textContent = currentCell.moist != null ? (currentCell.moist*100).toFixed(0) + '%' : '—';
   const reco = recommendationFor(currentCell);
   const recoEl = document.getElementById('pos-reco');
@@ -595,8 +625,7 @@ function onMapTap(zone, el){
   el.classList.add('tapped');
   const info = document.getElementById('tap-info');
   const reco = recommendationFor(zone);
-  const ndreTxt = zone.ndre != null ? zone.ndre.toFixed(2) : '—';
-  info.innerHTML = `<b>${zone.id}</b> — NDVI ${zone.ndvi.toFixed(2)} · NDRE ${ndreTxt}<br>${reco.text}`;
+  info.innerHTML = `<b>${zone.id}</b> — NDVI ${formatIndex(zone.ndvi)} · NDRE ${formatIndex(zone.ndre)}<br>${reco.text}`;
   info.classList.add('show');
 }
 
@@ -614,7 +643,7 @@ function renderAlerts(){
         <div class="alert-zone">${c.id}</div>
         <div class="alert-desc">${recommendationFor(c).text}</div>
       </div>
-      <div class="alert-val">${c.ndvi.toFixed(2)}</div>
+      <div class="alert-val">${formatIndex(c.ndvi)}</div>
     `;
     alertsEl.appendChild(row);
   });

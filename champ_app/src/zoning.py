@@ -1,5 +1,7 @@
 """Découpage d'un raster d'indice en zones et détection des zones à alerter."""
 
+import math
+
 import numpy as np
 
 # Seuils par défaut — À VALIDER PAR UN AGRONOME avant tout usage réel.
@@ -11,10 +13,26 @@ DEFAULT_THRESHOLDS = {
 
 
 def get_thresholds(overrides: dict | None = None) -> dict:
-    """Retourne les seuils de zonage, avec possibilité de surcharge explicite."""
+    """Retourne les seuils de zonage, avec possibilité de surcharge explicite.
+
+    Lève ValueError si les seuils sont inexploitables : non numériques, NaN/inf,
+    hors de la plage du NDVI [-1, 1], ou si critical >= warning. Sans cette
+    validation, un seuil NaN désactive silencieusement toutes les alertes et un
+    seuil incohérent produit des statuts absurdes.
+    """
     thresholds = dict(DEFAULT_THRESHOLDS)
     if overrides:
         thresholds.update({k: float(v) for k, v in overrides.items() if v is not None})
+
+    for name in ("critical", "warning"):
+        value = thresholds[name]
+        if not math.isfinite(value) or not -1.0 <= value <= 1.0:
+            raise ValueError(f"Le seuil '{name}' doit être un nombre compris entre -1 et 1 (reçu : {value}).")
+    if thresholds["critical"] >= thresholds["warning"]:
+        raise ValueError(
+            f"Le seuil 'critical' ({thresholds['critical']}) doit être strictement inférieur "
+            f"au seuil 'warning' ({thresholds['warning']})."
+        )
     return thresholds
 
 

@@ -35,6 +35,7 @@ from src.demo_data import generate_synthetic_bands
 from src.fetch_sentinel import SentinelHubConfigError, fetch_field_bands
 from src.logging_config import setup_logging, get_logger
 from src.main import run_pipeline
+from src.zoning import get_thresholds
 from src.tokens import is_production_environment
 
 load_environment()
@@ -344,6 +345,10 @@ def api_create_analysis(
         "critical": payload.critical_threshold,
         "warning": payload.warning_threshold,
     }
+    try:
+        get_thresholds(thresholds)
+    except ValueError as exc:
+        _raise_api_error(422, "validation_error", str(exc))
     if payload.source == "synthetic":
         bands = generate_synthetic_bands(seed=field_id)
     else:

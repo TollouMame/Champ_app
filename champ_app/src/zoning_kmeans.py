@@ -18,7 +18,7 @@ est bas, plus le clustering suit fidèlement l'indice (au risque de zones
 import numpy as np
 from sklearn.cluster import KMeans
 
-from src.zoning import DEFAULT_THRESHOLDS, classify_zone
+from src.zoning import classify_zone, get_thresholds
 
 
 def segment_zones_kmeans(
@@ -26,6 +26,7 @@ def segment_zones_kmeans(
     n_zones: int = 6,
     spatial_weight: float = 0.4,
     random_state: int = 0,
+    thresholds: dict | None = None,
 ) -> tuple[np.ndarray, list[dict]]:
     """
     raster : (H, W), NaN pour les pixels invalides/masqués.
@@ -37,6 +38,7 @@ def segment_zones_kmeans(
                   centroid_row, centroid_col}, triée par position
                   (haut-gauche vers bas-droite) pour un étiquetage stable
     """
+    resolved_thresholds = get_thresholds(thresholds)  # valide aussi les seuils
     h, w = raster.shape
     valid_mask = ~np.isnan(raster)
 
@@ -88,7 +90,7 @@ def segment_zones_kmeans(
             "pixel_count": z["pixel_count"],
             "area_ratio": round(z["pixel_count"] / valid_mask.sum(), 3),
             "mean_value": round(z["mean_value"], 3),
-            "status": classify_zone(z["mean_value"], DEFAULT_THRESHOLDS),
+            "status": classify_zone(z["mean_value"], resolved_thresholds),
             "centroid_row": round(z["centroid_row"], 1),
             "centroid_col": round(z["centroid_col"], 1),
         })

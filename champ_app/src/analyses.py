@@ -24,8 +24,10 @@ def save_analysis(
                 field_id,
                 source,
                 method,
-                json.dumps(parameters, ensure_ascii=False),
-                json.dumps(result, ensure_ascii=False),
+                # allow_nan=False : un NaN ne doit jamais être persisté (il rendrait
+                # ensuite toute la liste d'analyses du champ illisible en JSON)
+                json.dumps(parameters, ensure_ascii=False, allow_nan=False),
+                json.dumps(result, ensure_ascii=False, allow_nan=False),
             ),
         )
         conn.commit()
@@ -48,13 +50,19 @@ def list_analyses(db_path: str | Path, field_id: int) -> list[dict]:
         conn.close()
 
 
+def _loads_lenient(raw: str):
+    """json.loads qui remplace NaN/Infinity par None, pour que les analyses déjà
+    enregistrées avec un NaN (avant ce correctif) restent affichables."""
+    return json.loads(raw, parse_constant=lambda _constant: None)
+
+
 def _decode_analysis(analysis: dict) -> dict:
     return {
         "id": analysis["id"],
         "field_id": analysis["field_id"],
         "source": analysis["source"],
         "method": analysis["method"],
-        "parameters": json.loads(analysis["parameters_json"]),
-        "result": json.loads(analysis["result_json"]),
+        "parameters": _loads_lenient(analysis["parameters_json"]),
+        "result": _loads_lenient(analysis["result_json"]),
         "created_at": analysis["created_at"],
     }

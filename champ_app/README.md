@@ -274,6 +274,25 @@ majeure tant que le cœur métier n'est pas pleinement stabilisé.
   copiez `.env.example` en `.env`. En production, ne définissez pas
   `ENV=development` et fournissez un vrai secret
   (`python -c "import secrets; print(secrets.token_urlsafe(48))"`).
+- **Tokens** : signés en HS256 avec PyJWT (`python-jose` a été retiré : faille connue sans
+  correctif). `exp` et `sub` sont exigés, et `JWT_SECRET_KEY` doit faire **au moins 32
+  caractères** hors `ENV=development`.
+- **Mots de passe** : PBKDF2-SHA256, 600 000 itérations. Le coût est stocké avec le hash ; les
+  anciens comptes (260 000) sont migrés automatiquement à leur prochaine connexion. Un email
+  inconnu dépense le même temps de calcul qu'un compte existant (pas d'énumération par le temps
+  de réponse).
+- **En-têtes HTTP** : `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`,
+  HSTS hors développement, et une **Content-Security-Policy** sur les pages HTML (`connect-src
+  'self'` empêche d'envoyer le token vers un serveur tiers). Pour tester la politique sur de vrais
+  appareils sans rien bloquer : `CSP_REPORT_ONLY=1`. Si vous ajoutez une ressource externe
+  (police, tuiles, script), ajoutez son hôte à `CONTENT_SECURITY_POLICY` dans `api.py` : un test
+  vérifie que toutes les pages restent couvertes.
+- **Pas de CDN pour le code** : Leaflet et Leaflet.draw sont hébergés dans `static/vendor/` (voir
+  `static/vendor/README.md` pour la provenance et la mise à jour).
+- `/docs`, `/redoc` et `/openapi.json` ne sont servis qu'avec `ENV=development`. `/health` ne
+  renvoie que `status` et `database` (vérifiée réellement ; 503 si la base ne répond pas).
+- Ce que le front affiche venant de l'API passe par `textContent` ou `escapeHtml()`, jamais par
+  `innerHTML` brut.
 - Le CORS est désormais limité par défaut à des origines locales sûres
   (`localhost` / `127.0.0.1` sur les ports 3000 et 8000), avec possibilité
   de surcharger la liste via `CORS_ALLOWED_ORIGINS`.

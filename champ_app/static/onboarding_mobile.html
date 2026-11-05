@@ -127,6 +127,18 @@
     align-self:center;
   }
 
+  .link-btn-danger{ color: var(--critical); }
+  .danger-btn{ background: var(--critical); color: #fff; }
+  .danger-btn:active{ background: #a8502d; }
+  .data-rights{
+    margin-top:28px;
+    padding-top:14px;
+    border-top:1px solid var(--line);
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+  }
+
   .progress-dots{
     display:flex;
     gap:6px;
@@ -244,6 +256,27 @@
     <div id="fields-list"></div>
     <button class="primary-btn" id="btn-add-field">+ Ajouter un champ</button>
     <button class="link-btn" id="btn-logout">Se déconnecter</button>
+
+    <div class="data-rights">
+      <div class="eyebrow">Mes données</div>
+      <button class="link-btn" id="btn-export-data">Télécharger mes données (JSON)</button>
+      <div class="field-error" id="err-export"></div>
+      <button class="link-btn link-btn-danger" id="btn-goto-delete">Supprimer mon compte et mes données</button>
+    </div>
+  </div>
+
+  <!-- SUPPRESSION DU COMPTE -->
+  <div class="step" id="step-delete">
+    <div class="eyebrow">Supprimer mon compte</div>
+    <h1>Cette action est définitive</h1>
+    <div class="subtext">Votre compte, vos champs, leurs analyses et les traitements enregistrés seront effacés. Vous pouvez d'abord télécharger vos données depuis la page « Mes champs ».</div>
+
+    <label for="delete-password">Votre mot de passe</label>
+    <input type="password" id="delete-password" placeholder="Pour confirmer" autocomplete="current-password">
+    <div class="field-error" id="err-delete"></div>
+
+    <button class="primary-btn danger-btn" id="btn-delete-account">Supprimer définitivement</button>
+    <button class="link-btn" id="btn-cancel-delete">Annuler</button>
   </div>
 
   <!-- STEP 1 : compte -->
@@ -356,17 +389,31 @@ function clearSession(){
   try{ localStorage.removeItem(SESSION_KEY); } catch(err){ /* rien à faire */ }
 }
 
+async function describeApiError(res){
+  // L'API renvoie {detail:{error,detail,message}} (erreurs métier), {detail:"..."}, un tableau
+  // Pydantic (422) ou {message:"..."} (limite de débit). Sans ce tri, new Error(objet)
+  // affichait « [object Object] ».
+  try{
+    const data = await res.json();
+    const d = data && data.detail;
+    let msg;
+    if(Array.isArray(d)) msg = d[0] && d[0].msg;
+    else if(d && typeof d === 'object') msg = d.message || d.detail;
+    else if(typeof d === 'string') msg = d;
+    else msg = data && data.message;
+    if(msg) return msg;
+  } catch(_err){ /* corps non JSON (ex. 500 brut) */ }
+  return 'Erreur serveur (code ' + res.status + ').';
+}
+
 async function apiCall(path, options){
   const headers = { 'Content-Type': 'application/json', ...(options?.headers||{}) };
   if(state.token){ headers['Authorization'] = 'Bearer ' + state.token; }
   const res = await fetch(API_BASE + path, { ...options, headers });
-  const data = await res.json();
   if(!res.ok){
-    // FastAPI renvoie soit {detail:"message"} soit un tableau d'erreurs Pydantic (422)
-    const msg = Array.isArray(data.detail) ? data.detail[0].msg : data.detail;
-    throw new Error(msg || 'Erreur serveur.');
+    throw new Error(await describeApiError(res));
   }
-  return data;
+  return await res.json();
 }
 
 function showStep(n){
@@ -481,6 +528,65 @@ document.getElementById('btn-logout').addEventListener('click', ()=>{
   clearSession();
   state.token = null; state.userId = null; state.email = '';
   showStep('welcome');
+});
+
+// ---- droits sur les données (RGPD) : export et suppression du compte ----
+function networkErrorMessage(err){
+  return err instanceof TypeError ? 'API injoignable (' + API_BASE + ').' : err.message;
+}
+
+document.getElementById('btn-export-data').addEventListener('click', async ()=>{
+  const errEl = document.getElementById('err-export');
+  errEl.textContent = '';
+  try{
+    const res = await fetch(API_BASE + '/account/export', { headers: { 'Authorization': 'Bearer ' + state.token } });
+    if(!res.ok){ throw new Error(await describeApiError(res)); }
+    const url = URL.createObjectURL(await res.blob());
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'champ_app_mes_donnees.json';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  } catch(err){
+    errEl.textContent = networkErrorMessage(err);
+  }
+});
+
+document.getElementById('btn-goto-delete').addEventListener('click', ()=>{
+  document.getElementById('delete-password').value = '';
+  document.getElementById('err-delete').textContent = '';
+  showStep('delete');
+});
+
+document.getElementById('btn-cancel-delete').addEventListener('click', ()=>{
+  document.getElementById('delete-password').value = '';
+  showStep('fields');
+});
+
+document.getElementById('btn-delete-account').addEventListener('click', async ()=>{
+  const errEl = document.getElementById('err-delete');
+  const button = document.getElementById('btn-delete-account');
+  const password = document.getElementById('delete-password').value;
+  errEl.textContent = '';
+  if(!password){
+    errEl.textContent = 'Saisissez votre mot de passe pour confirmer.';
+    return;
+  }
+  button.disabled = true;
+  try{
+    await apiCall('/account/delete', { method: 'POST', body: JSON.stringify({ password }) });
+    clearSession();
+    state.token = null; state.userId = null; state.email = '';
+    document.getElementById('delete-password').value = '';
+    showStep('welcome');
+    alert('Votre compte et toutes vos données ont été supprimés.');
+  } catch(err){
+    errEl.textContent = networkErrorMessage(err);
+  } finally {
+    button.disabled = false;
+  }
 });
 
 // ---- restauration automatique de session au chargement de la page ----

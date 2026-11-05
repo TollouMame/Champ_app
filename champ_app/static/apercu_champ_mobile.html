@@ -528,7 +528,7 @@ async function refreshAnalysis(){
       headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
       body: JSON.stringify({ source: 'synthetic', method: 'kmeans', n_zones: 6 })
     });
-    if(!res.ok) throw new Error('API a répondu ' + res.status);
+    if(!res.ok) throw new Error(await describeApiError(res));
     useAnalysis(await res.json());
     updateSourceBadge();
     renderPosition();
@@ -568,6 +568,23 @@ function recommendationFor(cell){
 }
 
 // ---- render position tab ----
+async function describeApiError(res){
+  // L'API renvoie {detail:{error,detail,message}} (erreurs métier), {detail:"..."}, un tableau
+  // Pydantic (422) ou {message:"..."} (limite de débit). Sans ce tri, new Error(objet)
+  // affichait « [object Object] ».
+  try{
+    const data = await res.json();
+    const d = data && data.detail;
+    let msg;
+    if(Array.isArray(d)) msg = d[0] && d[0].msg;
+    else if(d && typeof d === 'object') msg = d.message || d.detail;
+    else if(typeof d === 'string') msg = d;
+    else msg = data && data.message;
+    if(msg) return msg;
+  } catch(_err){ /* corps non JSON (ex. 500 brut) */ }
+  return 'Erreur serveur (code ' + res.status + ').';
+}
+
 function escapeHtml(value){
   // à utiliser pour toute valeur venant de l'API insérée via innerHTML
   return String(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -701,7 +718,7 @@ markBtn.addEventListener('click', async ()=>{
       },
       body: JSON.stringify({ analysis_id: currentAnalysisId, zone_id: currentCell.id })
     });
-    if(!res.ok) throw new Error('API a répondu ' + res.status);
+    if(!res.ok) throw new Error(await describeApiError(res));
     markBtn.textContent = 'Zone marquée comme traitée ✓';
     markBtn.classList.add('done');
   } catch(err){

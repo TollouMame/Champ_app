@@ -83,6 +83,16 @@ def register_user(db_path: str | Path, email: str, password: str) -> int:
         conn.close()
 
 
+def get_user(db_path: str | Path, user_id: int) -> dict | None:
+    """Infos publiques d'un compte (id, email, date de création) ; jamais le hash ni le sel."""
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute("SELECT id, email, created_at FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def authenticate_user(db_path: str | Path, email: str, password: str) -> int:
     """Vérifie les identifiants. Retourne l'id utilisateur si valide, lève AuthError sinon."""
     email = email.strip().lower()

@@ -26,7 +26,7 @@ from slowapi.util import get_remote_address
 
 from src import tokens as tokens_module
 from src.db import get_connection, init_db
-from src.auth import register_user, authenticate_user, AuthError
+from src.auth import register_user, authenticate_user, AuthError, get_user
 from src.analyses import save_analysis, list_analyses, count_analyses
 from src.treatments import save_treatment, list_treatments, TreatmentError
 from src.fields import register_field, list_fields, get_field, FieldError, CROPS_DISPONIBLES
@@ -34,6 +34,7 @@ from src.config import load_environment
 from src.demo_data import generate_synthetic_bands
 from src.fetch_sentinel import SentinelHubConfigError, fetch_field_bands
 from src.geometry import LOW_QUALITY_PIXEL_RATIO, MIN_VALID_PIXEL_RATIO, prepare_bands
+from src.privacy import delete_field, delete_user_account, export_user_data, pseudonymize_email
 from src.logging_config import setup_logging, get_logger
 from src.main import run_pipeline
 from src.zoning import get_thresholds
@@ -70,6 +71,11 @@ def get_auth_rate_limit() -> str:
     """Limite de requêtes sur les routes d'authentification (protection brute-force).
     Format slowapi, ex: '10/minute'. Configurable via AUTH_RATE_LIMIT."""
     return os.environ.get("AUTH_RATE_LIMIT", "10/minute")
+
+
+def get_export_rate_limit() -> str:
+    """Limite d'export de données (coûteux : relit toutes les analyses du compte)."""
+    return os.environ.get("EXPORT_RATE_LIMIT", "10/hour")
 
 
 def get_analysis_rate_limit() -> str:
@@ -230,9 +236,15 @@ def get_current_user_id(authorization: str = Header(None)) -> int:
         _raise_api_error(401, "authentication_error", "Token d'authentification manquant.")
     token = authorization.removeprefix("Bearer ").strip()
     try:
-        return tokens_module.decode_access_token(token)
+        user_id = tokens_module.decode_access_token(token)
     except tokens_module.TokenError as e:
         _raise_api_error(401, "authentication_error", str(e))
+    # Un token reste cryptographiquement valide 7 jours : sans ce contrôle, un compte
+    # supprimé (droit à l'effacement) continuerait d'être accepté, et créer un champ
+    # avec un utilisateur inexistant lèverait une erreur de clé étrangère (500).
+    if get_user(get_db_path(), user_id) is None:
+        _raise_api_error(401, "authentication_error", "Compte introuvable ou supprimé.")
+    return user_id
 
 # Config CORS configurable via variable d'environnement pour éviter l'ouverture totale en production.
 app.add_middleware(
@@ -309,6 +321,10 @@ class AnalysisRequest(BaseModel):
     warning_threshold: float | None = None
 
 
+class AccountDeleteRequest(BaseModel):
+    password: str = Field(max_length=128)
+
+
 class ZoneTreatmentRequest(BaseModel):
     analysis_id: int
     zone_id: str = Field(max_length=16)
@@ -329,7 +345,7 @@ def api_register(request: Request, payload: RegisterRequest):
     except AuthError as e:
         logger.warning(
             "échec d'inscription",
-            extra={"request_id": getattr(request.state, "request_id", None), "email": email, "reason": str(e)},
+            extra={"request_id": getattr(request.state, "request_id", None), "email_hash": pseudonymize_email(email), "reason": str(e)},
         )
         _raise_api_error(400, "auth_error", str(e))
     logger.info(
@@ -354,7 +370,7 @@ def api_login(request: Request, payload: RegisterRequest):
             "échec de connexion",
             extra={
                 "request_id": getattr(request.state, "request_id", None),
-                "email": payload.email.strip().lower(),
+                "email_hash": pseudonymize_email(payload.email),
                 "client_ip": get_remote_address(request),
             },
         )
@@ -368,6 +384,68 @@ def api_login(request: Request, payload: RegisterRequest):
         "access_token": tokens_module.create_access_token(user_id),
         "expires_in_seconds": tokens_module.TOKEN_EXPIRY_HOURS * 60 * 60,
     }
+
+
+@app.get("/account/export")
+@limiter.limit(get_export_rate_limit)
+def api_export_account(request: Request, user_id: int = Depends(get_current_user_id)):
+    """Droit d'accès / portabilité : toutes les données du compte en JSON (sans mot de passe)."""
+    data = export_user_data(get_db_path(), user_id)
+    logger.info(
+        "export des données",
+        extra={"request_id": getattr(request.state, "request_id", None), "user_id": user_id, "fields": len(data["fields"])},
+    )
+    return JSONResponse(
+        content=data,
+        headers={
+            "Content-Disposition": 'attachment; filename="champ_app_mes_donnees.json"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@app.post("/account/delete")
+@limiter.limit(get_auth_rate_limit)
+def api_delete_account(
+    request: Request, payload: AccountDeleteRequest, user_id: int = Depends(get_current_user_id)
+):
+    """Droit à l'effacement : supprime définitivement le compte et toutes ses données.
+
+    Exige le mot de passe (un token volé ne suffit pas à détruire un compte) et partage la
+    limite de débit des routes d'authentification (sinon ce serait un moyen de tester des
+    mots de passe sans limite). POST plutôt que DELETE : certains proxys suppriment le
+    corps d'un DELETE.
+    """
+    user = get_user(get_db_path(), user_id)
+    try:
+        authenticate_user(get_db_path(), user["email"], payload.password)
+    except AuthError:
+        logger.warning(
+            "suppression de compte refusée : mot de passe incorrect",
+            extra={
+                "request_id": getattr(request.state, "request_id", None),
+                "user_id": user_id,
+                "client_ip": get_remote_address(request),
+            },
+        )
+        _raise_api_error(403, "invalid_password", "Mot de passe incorrect.")
+
+    deleted = delete_user_account(get_db_path(), user_id)
+    logger.info(
+        "compte supprimé",
+        extra={"request_id": getattr(request.state, "request_id", None), "user_id": user_id, **deleted},
+    )
+    return {"deleted": True, **deleted}
+
+
+@app.delete("/fields/{field_id}")
+def api_delete_field(field_id: int, user_id: int = Depends(get_current_user_id)):
+    """Supprime un champ, ses analyses et ses traitements."""
+    deleted = delete_field(get_db_path(), field_id, user_id)
+    if deleted is None:
+        _raise_api_error(404, "not_found", "Champ introuvable.")
+    logger.info("champ supprimé", extra={"user_id": user_id, "field_id": field_id, **deleted})
+    return {"deleted": True, "field_id": field_id, **deleted}
 
 
 @app.post("/fields", response_model=FieldResponse)

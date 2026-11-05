@@ -5,7 +5,7 @@ from src import api
 
 def test_treatment_is_linked_to_its_field_analysis_and_hidden_from_others(monkeypatch, tmp_path):
     monkeypatch.setattr(api, "DB_PATH", tmp_path / "app.db")
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-pour-la-suite-de-tests-0123456789")
 
     with TestClient(api.app) as client:
         owner = client.post(

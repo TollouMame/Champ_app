@@ -254,6 +254,19 @@ majeure tant que le cœur métier n'est pas pleinement stabilisé.
 | Taille d'une requête | 1 Mo (Content-Length) | variable `MAX_BODY_BYTES` ; à doubler sur le reverse proxy |
 | Liste des analyses | 20 par page (max 100) | paramètres `limit` et `offset` |
 
+## Droits des personnes (RGPD)
+
+| Besoin | Route | Interface |
+|---|---|---|
+| Récupérer ses données | `GET /account/export` (JSON) | « Mes champs » → *Télécharger mes données* |
+| Supprimer son compte et tout ce qui s'y rattache | `POST /account/delete` avec `{"password": "..."}` | « Mes champs » → *Supprimer mon compte* |
+| Supprimer une parcelle (avec ses analyses et traitements) | `DELETE /fields/{id}` | API seulement |
+
+L'effacement est réel dans le fichier SQLite (`secure_delete`), un jeton de session d'un compte supprimé
+n'est plus accepté, et les journaux ne contiennent plus d'email en clair (`email_hash`). Ce qui n'est
+**pas** couvert (sauvegardes, journaux, services tiers) et ce qu'il reste à faire côté juridique sont
+détaillés dans [`docs/RGPD.md`](docs/RGPD.md).
+
 ## Choix de sécurité à noter
 
 - Mots de passe hachés en PBKDF2-HMAC-SHA256 avec sel aléatoire (pas de

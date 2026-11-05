@@ -4,7 +4,7 @@ from src import api
 
 
 def test_invalid_email_returns_clear_error(monkeypatch, tmp_path):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-pour-la-suite-de-tests-0123456789")
     monkeypatch.setattr(api, "DB_PATH", tmp_path / "app.db")
 
     with TestClient(api.app) as client:
@@ -21,7 +21,7 @@ def test_invalid_email_returns_clear_error(monkeypatch, tmp_path):
 
 
 def test_invalid_sowing_date_returns_clear_error(monkeypatch, tmp_path):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-pour-la-suite-de-tests-0123456789")
     monkeypatch.setattr(api, "DB_PATH", tmp_path / "app.db")
 
     with TestClient(api.app) as client:
@@ -52,7 +52,7 @@ def test_invalid_sowing_date_returns_clear_error(monkeypatch, tmp_path):
 
 
 def test_auth_response_exposes_token_lifetime(monkeypatch, tmp_path):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-pour-la-suite-de-tests-0123456789")
     monkeypatch.setattr(api, "DB_PATH", tmp_path / "app.db")
 
     with TestClient(api.app) as client:
@@ -67,7 +67,7 @@ def test_auth_response_exposes_token_lifetime(monkeypatch, tmp_path):
 
 
 def test_zones_endpoint_accepts_and_forwards_query_parameters(monkeypatch, tmp_path):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-pour-la-suite-de-tests-0123456789")
     monkeypatch.setattr(api, "DB_PATH", tmp_path / "app.db")
 
     captured = {}

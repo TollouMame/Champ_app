@@ -28,19 +28,33 @@ from sentinelhub import (
 )
 
 # Evalscript : demande les bandes brutes nécessaires au calcul NDVI/NDRE.
-# B04 = rouge, B05 = red edge, B08 = proche infrarouge
+# B04 = rouge, B05 = red edge, B08 = proche infrarouge.
+#
+# ATTENTION : `dataMask` indique seulement qu'un pixel contient des données, il
+# ne détecte PAS les nuages. Un pixel nuageux ou à l'ombre d'un nuage aurait un
+# NDVI très bas et déclencherait une fausse alerte « critique ». On combine donc
+# dataMask avec la classification de scène Sentinel-2 L2A (bande SCL) et on ne
+# garde que les pixels classés 4 (végétation) ou 5 (sol nu). Sont exclus :
+# 0 sans donnée, 1 saturé/défectueux, 2 zones sombres, 3 ombres de nuages,
+# 6 eau, 7 non classé, 8/9 nuages (probabilité moyenne/haute), 10 cirrus fin,
+# 11 neige/glace. Choix prudent, À VALIDER sur des images réelles de vos parcelles.
+# Le 4e canal renvoyé reste donc « 1 = pixel exploitable », comme avant.
 EVALSCRIPT_BANDS = """
 //VERSION=3
 function setup() {
   return {
-    input: ["B04", "B05", "B08", "dataMask"],
+    input: ["B04", "B05", "B08", "SCL", "dataMask"],
     output: { bands: 4, sampleType: "FLOAT32" }
   };
 }
 function evaluatePixel(sample) {
-  return [sample.B04, sample.B05, sample.B08, sample.dataMask];
+  var clear = (sample.SCL === 4 || sample.SCL === 5) ? 1 : 0;
+  return [sample.B04, sample.B05, sample.B08, sample.dataMask * clear];
 }
 """
+
+# Sentinel Hub refuse les images de plus de 2500 pixels de côté.
+MAX_IMAGE_SIDE_PX = 2500
 
 
 class SentinelHubConfigError(RuntimeError):
@@ -91,6 +105,11 @@ def fetch_field_bands(
 
     bbox = BBox(bbox=bbox_coords, crs=CRS.WGS84)
     size = bbox_to_dimensions(bbox, resolution=resolution)
+    if max(size) > MAX_IMAGE_SIDE_PX:
+        raise ValueError(
+            f"Zone trop étendue pour cette résolution ({size[0]}x{size[1]} pixels, "
+            f"maximum {MAX_IMAGE_SIDE_PX}). Réduisez la parcelle ou augmentez la résolution (en mètres)."
+        )
 
     if date is None:
         time_interval = (

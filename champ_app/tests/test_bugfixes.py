@@ -57,7 +57,7 @@ def _create_field(client, headers):
 
 
 def test_analyses_endpoint_rejects_oversized_grid(monkeypatch, tmp_path):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-pour-la-suite-de-tests-0123456789")
     monkeypatch.setattr(api, "DB_PATH", tmp_path / "app.db")
 
     with TestClient(api.app) as client:
@@ -75,7 +75,7 @@ def test_analyses_endpoint_rejects_oversized_grid(monkeypatch, tmp_path):
 
 
 def test_analyses_endpoint_rejects_oversized_n_zones(monkeypatch, tmp_path):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-pour-la-suite-de-tests-0123456789")
     monkeypatch.setattr(api, "DB_PATH", tmp_path / "app.db")
 
     with TestClient(api.app) as client:
@@ -93,7 +93,7 @@ def test_analyses_endpoint_rejects_oversized_n_zones(monkeypatch, tmp_path):
 
 
 def test_zones_endpoint_rejects_oversized_grid(monkeypatch, tmp_path):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-pour-la-suite-de-tests-0123456789")
     monkeypatch.setattr(api, "DB_PATH", tmp_path / "app.db")
 
     with TestClient(api.app) as client:
@@ -128,7 +128,7 @@ def test_grid_pipeline_returns_none_instead_of_nan_on_fully_masked_raster():
 
 
 def test_analyses_endpoint_returns_clean_422_on_unusable_image(monkeypatch, tmp_path):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-pour-la-suite-de-tests-0123456789")
     monkeypatch.setattr(api, "DB_PATH", tmp_path / "app.db")
     monkeypatch.setattr(api, "generate_synthetic_bands", lambda seed: _fully_masked_bands())
 
@@ -149,7 +149,7 @@ def test_analyses_endpoint_returns_clean_422_on_unusable_image(monkeypatch, tmp_
 # ---------- 5. rate limiting sur les routes d'authentification ----------
 
 def test_login_is_rate_limited_after_too_many_attempts(monkeypatch, tmp_path):
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-pour-la-suite-de-tests-0123456789")
     monkeypatch.setenv("AUTH_RATE_LIMIT", "3/minute")
     monkeypatch.setattr(api, "DB_PATH", tmp_path / "app.db")
 

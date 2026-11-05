@@ -25,7 +25,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from src import tokens as tokens_module
-from src.db import init_db
+from src.db import get_connection, init_db
 from src.auth import register_user, authenticate_user, AuthError
 from src.analyses import save_analysis, list_analyses, count_analyses
 from src.treatments import save_treatment, list_treatments, TreatmentError
@@ -37,7 +37,7 @@ from src.geometry import LOW_QUALITY_PIXEL_RATIO, MIN_VALID_PIXEL_RATIO, prepare
 from src.logging_config import setup_logging, get_logger
 from src.main import run_pipeline
 from src.zoning import get_thresholds
-from src.tokens import is_production_environment
+from src.tokens import is_development_environment, is_production_environment
 
 load_environment()
 setup_logging()
@@ -103,7 +103,15 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Suivi de champs — API", lifespan=lifespan)
+def get_docs_kwargs() -> dict:
+    """/docs, /redoc et /openapi.json décrivent toute l'API à un attaquant : ils ne sont
+    servis qu'avec ENV=development explicite (même logique que le secret JWT)."""
+    if is_development_environment():
+        return {}
+    return {"docs_url": None, "redoc_url": None, "openapi_url": None}
+
+
+app = FastAPI(title="Suivi de champs — API", lifespan=lifespan, **get_docs_kwargs())
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _handle_rate_limit_exceeded)
 
@@ -165,6 +173,50 @@ async def log_requests(request: Request, call_next):
     return response
 
 
+# Politique de sécurité du contenu des pages (HTML). Les scripts et styles inline des
+# pages imposent 'unsafe-inline', mais le plus important est conservé :
+# connect-src 'self' empêche d'envoyer le token à un serveur tiers même si du code
+# injecté s'exécutait, et script-src liste les seules origines autorisées.
+CONTENT_SECURITY_POLICY = "; ".join([
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' data: https://*.tile.openstreetmap.org",
+    "connect-src 'self'",
+    "worker-src 'self'",
+    "manifest-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+])
+
+
+def _csp_header_name() -> str:
+    """CSP_REPORT_ONLY=1 : le navigateur signale les violations sans rien bloquer (utile
+    pour tester une nouvelle politique sur de vrais appareils avant de l'appliquer)."""
+    report_only = os.environ.get("CSP_REPORT_ONLY", "").strip().lower() in {"1", "true", "yes"}
+    return "Content-Security-Policy-Report-Only" if report_only else "Content-Security-Policy"
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    headers = response.headers
+    headers.setdefault("X-Content-Type-Options", "nosniff")
+    headers.setdefault("X-Frame-Options", "DENY")
+    headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    headers.setdefault("Permissions-Policy", "geolocation=(self), camera=(), microphone=(), payment=()")
+    if not is_development_environment():
+        headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    # la CSP ne vise que les pages ; la documentation Swagger (dev) charge ses scripts depuis un CDN
+    is_html = response.headers.get("content-type", "").startswith("text/html")
+    if is_html and request.url.path not in ("/docs", "/redoc"):
+        headers.setdefault(_csp_header_name(), CONTENT_SECURITY_POLICY)
+    return response
+
+
 def _raise_api_error(status_code: int, error: str, detail: str) -> None:
     raise HTTPException(status_code=status_code, detail={"error": error, "detail": detail, "message": detail})
 
@@ -193,12 +245,18 @@ app.add_middleware(
 
 @app.get("/health")
 def api_health():
-    return {
-        "status": "ok",
-        "database": "ready",
-        "environment": "production" if is_production_environment() else "development",
-        "database_path": str(get_db_path()),
-    }
+    """Sonde de disponibilité, publique : volontairement sans détail interne (chemin du
+    fichier, environnement). Vérifie réellement que la base répond."""
+    try:
+        conn = get_connection(get_db_path())
+        try:
+            conn.execute("SELECT 1").fetchone()
+        finally:
+            conn.close()
+    except Exception:
+        logger.exception("sonde de santé : base de données indisponible")
+        return JSONResponse(status_code=503, content={"status": "degraded", "database": "unavailable"})
+    return {"status": "ok", "database": "ready"}
 
 
 # ---------- schémas de requête/réponse ----------

@@ -568,6 +568,11 @@ function recommendationFor(cell){
 }
 
 // ---- render position tab ----
+function escapeHtml(value){
+  // à utiliser pour toute valeur venant de l'API insérée via innerHTML
+  return String(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+
 function formatIndex(value){
   // les zones sans pixel valide (ou sans NDRE) ont une valeur null côté serveur
   return typeof value === 'number' && isFinite(value) ? value.toFixed(2) : '—';
@@ -625,7 +630,7 @@ function onMapTap(zone, el){
   el.classList.add('tapped');
   const info = document.getElementById('tap-info');
   const reco = recommendationFor(zone);
-  info.innerHTML = `<b>${zone.id}</b> — NDVI ${formatIndex(zone.ndvi)} · NDRE ${formatIndex(zone.ndre)}<br>${reco.text}`;
+  info.innerHTML = `<b>${escapeHtml(zone.id)}</b> — NDVI ${formatIndex(zone.ndvi)} · NDRE ${formatIndex(zone.ndre)}<br>${escapeHtml(reco.text)}`;
   info.classList.add('show');
 }
 
@@ -640,8 +645,8 @@ function renderAlerts(){
     row.className = 'alert-row';
     row.innerHTML = `
       <div>
-        <div class="alert-zone">${c.id}</div>
-        <div class="alert-desc">${recommendationFor(c).text}</div>
+        <div class="alert-zone">${escapeHtml(c.id)}</div>
+        <div class="alert-desc">${escapeHtml(recommendationFor(c).text)}</div>
       </div>
       <div class="alert-val">${formatIndex(c.ndvi)}</div>
     `;

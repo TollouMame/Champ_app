@@ -439,6 +439,24 @@ document.getElementById('btn-login').addEventListener('click', async ()=>{
 });
 
 // ---- mes champs ----
+function buildFieldRow(f){
+  // Construit la ligne avec textContent : le nom d'un champ est saisi par l'utilisateur
+  // et ne doit jamais être interprété comme du HTML (XSS stockée).
+  const a = document.createElement('a');
+  a.className = 'field-row';
+  a.href = 'apercu_champ_mobile.html?field_id=' + encodeURIComponent(f.id);
+  a.target = '_blank';
+  a.rel = 'noopener';
+  const nameEl = document.createElement('div');
+  nameEl.className = 'field-row-name';
+  nameEl.textContent = f.name;
+  const metaEl = document.createElement('div');
+  metaEl.className = 'field-row-meta';
+  metaEl.textContent = f.crop + ' · ' + f.area_ha + ' ha' + (f.sowing_date ? ' · semé le ' + f.sowing_date : '');
+  a.append(nameEl, metaEl);
+  return a;
+}
+
 async function enterFieldsList(){
   showStep('fields');
   document.getElementById('fields-email-label').textContent = state.email || 'Mes champs';
@@ -449,12 +467,7 @@ async function enterFieldsList(){
     const fields = await apiCall('/fields', { method:'GET' });
     emptyEl.style.display = fields.length ? 'none' : 'block';
     fields.forEach(f=>{
-      const a = document.createElement('a');
-      a.className = 'field-row';
-      a.href = `apercu_champ_mobile.html?field_id=${f.id}`;
-      a.target = '_blank';
-      a.innerHTML = `<div class="field-row-name">${f.name}</div><div class="field-row-meta">${f.crop} · ${f.area_ha} ha${f.sowing_date ? ' · semé le '+f.sowing_date : ''}</div>`;
-      listEl.appendChild(a);
+      listEl.appendChild(buildFieldRow(f));
     });
   } catch(err){
     emptyEl.textContent = 'Impossible de charger vos champs (' + err.message + ')';

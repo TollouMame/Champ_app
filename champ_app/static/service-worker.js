@@ -10,13 +10,26 @@
 
 // Incrémenter ce numéro à chaque changement de la coquille pour que les
 // appareils déjà installés abandonnent l'ancien cache (cf. 'activate').
-const CACHE_NAME = 'champ-app-shell-v2';
+const CACHE_NAME = 'champ-app-shell-v3';
 const SHELL_FILES = [
   '/onboarding_mobile.html',
   '/apercu_champ_mobile.html',
   '/manifest.json',
   '/icon-192.png',
   '/icon-512.png',
+  // Leaflet et Leaflet.draw hébergés localement (cf. static/vendor/README.md)
+  '/vendor/leaflet/leaflet.js',
+  '/vendor/leaflet/leaflet.css',
+  '/vendor/leaflet/images/layers.png',
+  '/vendor/leaflet/images/layers-2x.png',
+  '/vendor/leaflet/images/marker-icon.png',
+  '/vendor/leaflet/images/marker-icon-2x.png',
+  '/vendor/leaflet/images/marker-shadow.png',
+  '/vendor/leaflet-draw/leaflet.draw.js',
+  '/vendor/leaflet-draw/leaflet.draw.css',
+  '/vendor/leaflet-draw/images/spritesheet.png',
+  '/vendor/leaflet-draw/images/spritesheet-2x.png',
+  '/vendor/leaflet-draw/images/spritesheet.svg',
 ];
 
 self.addEventListener('install', (event) => {

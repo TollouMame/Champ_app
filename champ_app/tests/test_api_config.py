@@ -14,10 +14,8 @@ def test_health_endpoint_reports_service_status(monkeypatch, tmp_path):
         response = client.get("/health")
         assert response.status_code == 200
         payload = response.json()
-        assert payload["status"] == "ok"
-        assert payload["database"] == "ready"
-        assert payload["environment"] == "development"
-        assert payload["database_path"] == str(db_path)
+        assert payload == {"status": "ok", "database": "ready"}
+        assert str(db_path) not in response.text  # plus de chemin de fichier ni d'environnement
 
 
 def test_startup_fails_when_production_secret_is_missing(monkeypatch, tmp_path):

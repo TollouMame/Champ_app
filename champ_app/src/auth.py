@@ -16,7 +16,11 @@ from pathlib import Path
 
 from src.db import get_connection
 
-PBKDF2_ITERATIONS = 260_000
+PBKDF2_ITERATIONS = 600_000          # recommandation OWASP 2023 pour PBKDF2-HMAC-SHA256
+LEGACY_PBKDF2_ITERATIONS = 260_000   # comptes créés avant l'augmentation (hash sans préfixe)
+HASH_PREFIX = "pbkdf2_sha256"
+# Sel fixe servant uniquement à dépenser le même temps de calcul pour un email inconnu
+_DUMMY_SALT = bytes(16)
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MAX_EMAIL_LENGTH = 254  # limite standard RFC 5321
 MAX_PASSWORD_LENGTH = 128  # évite un coût PBKDF2 excessif sur une entrée très longue
@@ -27,11 +31,27 @@ class AuthError(Exception):
     mot de passe trop court, identifiants incorrects...)."""
 
 
-def _hash_password(password: str, salt: bytes | None = None) -> tuple[str, str]:
+def _hash_password(
+    password: str, salt: bytes | None = None, iterations: int = PBKDF2_ITERATIONS
+) -> tuple[str, str]:
+    """Retourne (hash stocké, sel en hexadécimal).
+
+    Le hash est stocké sous la forme 'pbkdf2_sha256$<itérations>$<hex>' : le nombre
+    d'itérations voyage avec le hash, ce qui permet de l'augmenter plus tard sans
+    casser les comptes existants.
+    """
     if salt is None:
         salt = os.urandom(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PBKDF2_ITERATIONS)
-    return digest.hex(), salt.hex()
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
+    return f"{HASH_PREFIX}${iterations}${digest.hex()}", salt.hex()
+
+
+def _parse_stored_hash(stored: str) -> tuple[int, str]:
+    """(itérations, hash hexadécimal). Sans préfixe = ancien format (260 000 itérations)."""
+    if stored.startswith(HASH_PREFIX + "$"):
+        _, iterations, digest = stored.split("$", 2)
+        return int(iterations), digest
+    return LEGACY_PBKDF2_ITERATIONS, stored
 
 
 def register_user(db_path: str | Path, email: str, password: str) -> int:
@@ -58,7 +78,17 @@ def register_user(db_path: str | Path, email: str, password: str) -> int:
         conn.commit()
         return cursor.lastrowid
     except sqlite3.IntegrityError:
-        raise AuthError("Un compte existe déjà avec cet email.")
+        raise AuthError("Un compte existe déjà avec cet email.") from None
+    finally:
+        conn.close()
+
+
+def get_user(db_path: str | Path, user_id: int) -> dict | None:
+    """Infos publiques d'un compte (id, email, date de création) ; jamais le hash ni le sel."""
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute("SELECT id, email, created_at FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
 
@@ -72,12 +102,23 @@ def authenticate_user(db_path: str | Path, email: str, password: str) -> int:
             "SELECT id, password_hash, salt FROM users WHERE email = ?", (email,)
         ).fetchone()
         if row is None:
+            # Même coût de calcul que pour un vrai compte : sans cela, une réponse
+            # 30 fois plus rapide révèle qu'aucun compte n'existe avec cet email,
+            # malgré le message d'erreur identique.
+            hashlib.pbkdf2_hmac("sha256", password.encode(), _DUMMY_SALT, PBKDF2_ITERATIONS)
             raise AuthError("Email ou mot de passe incorrect.")
 
-        computed_hash, _ = _hash_password(password, bytes.fromhex(row["salt"]))
+        iterations, expected_digest = _parse_stored_hash(row["password_hash"])
+        computed = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(row["salt"]), iterations).hex()
         # comparaison en temps constant pour éviter une attaque par mesure de timing
-        if not hmac.compare_digest(computed_hash, row["password_hash"]):
+        if not hmac.compare_digest(computed, expected_digest):
             raise AuthError("Email ou mot de passe incorrect.")
+
+        if iterations < PBKDF2_ITERATIONS:
+            # mot de passe vérifié : on profite de la connexion pour migrer vers le coût actuel
+            new_hash, new_salt = _hash_password(password)
+            conn.execute("UPDATE users SET password_hash = ?, salt = ? WHERE id = ?", (new_hash, new_salt, row["id"]))
+            conn.commit()
 
         return row["id"]
     finally:

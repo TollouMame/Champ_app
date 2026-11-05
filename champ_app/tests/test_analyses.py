@@ -8,7 +8,7 @@ from src.demo_data import generate_synthetic_bands
 
 def test_analysis_history_is_persisted_and_limited_to_field_owner(monkeypatch, tmp_path):
     monkeypatch.setattr(api, "DB_PATH", tmp_path / "app.db")
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-pour-la-suite-de-tests-0123456789")
 
     with TestClient(api.app) as client:
         registration = client.post(
@@ -39,7 +39,7 @@ def test_analysis_history_is_persisted_and_limited_to_field_owner(monkeypatch, t
 
 def test_sentinel_analysis_uses_field_bbox_and_persists_source(monkeypatch, tmp_path):
     monkeypatch.setattr(api, "DB_PATH", tmp_path / "app.db")
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-pour-la-suite-de-tests-0123456789")
     captured = {}
 
     def fake_fetch_field_bands(bbox, date=None, resolution=10):
@@ -73,7 +73,7 @@ def test_sentinel_analysis_uses_field_bbox_and_persists_source(monkeypatch, tmp_
 
 def test_sentinel_configuration_error_is_not_replaced_with_demo_data(monkeypatch, tmp_path):
     monkeypatch.setattr(api, "DB_PATH", tmp_path / "app.db")
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-pour-la-suite-de-tests-0123456789")
 
     def fail_fetch(*args, **kwargs):
         raise api.SentinelHubConfigError("identifiants absents")

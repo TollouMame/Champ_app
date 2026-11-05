@@ -14,6 +14,12 @@ CROPS_DISPONIBLES = [
 
 METERS_PER_DEGREE_LAT = 111_320
 
+# Garde-fous : la validation d'auto-intersection est en O(n²) et chaque analyse
+# coûte du calcul (et du quota Sentinel Hub) proportionnel à la surface.
+MAX_POLYGON_VERTICES = 500
+MAX_FIELD_AREA_HA = 1_000       # surface de la parcelle
+MAX_BBOX_AREA_HA = 4_000        # rectangle englobant (c'est lui qu'on demande au satellite)
+
 
 class FieldError(Exception):
     """Erreur de validation lors de l'enregistrement d'un champ."""
@@ -126,6 +132,8 @@ def _segments_intersect(
 def _validate_polygon(polygon: list[tuple[float, float]]) -> None:
     if len(polygon) < 3:
         raise FieldError("Un polygone doit avoir au moins 3 points.")
+    if len(polygon) > MAX_POLYGON_VERTICES:
+        raise FieldError(f"Un polygone ne peut pas avoir plus de {MAX_POLYGON_VERTICES} sommets.")
 
     seen = set()
     for lon, lat in polygon:
@@ -199,6 +207,14 @@ def register_field(
 
     if area_ha < 0.01:
         raise FieldError("La parcelle semble trop petite (< 0.01 ha) — vérifiez les coordonnées.")
+
+    if area_ha > MAX_FIELD_AREA_HA:
+        raise FieldError(f"La parcelle est trop grande ({area_ha:.0f} ha) : maximum {MAX_FIELD_AREA_HA} ha.")
+    if _bbox_area_ha(*bbox) > MAX_BBOX_AREA_HA:
+        raise FieldError(
+            f"Le rectangle englobant de la parcelle est trop grand (maximum {MAX_BBOX_AREA_HA} ha) : "
+            "vérifiez les coordonnées ou découpez la parcelle."
+        )
 
     min_lon, min_lat, max_lon, max_lat = bbox
 

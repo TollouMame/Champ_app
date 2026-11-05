@@ -225,6 +225,48 @@ majeure tant que le cœur métier n'est pas pleinement stabilisé.
 - une évolution vers une vraie app native seulement si l'usage métier le
   justifie réellement
 
+## Fiabilité des analyses et limites d'usage
+
+**Ce qui est calculé, et sur quels pixels**
+- Seuls les pixels **à l'intérieur du contour** de la parcelle (`polygon`) sont
+  utilisés ; routes, voisins et bois de la bbox sont ignorés (`src/geometry.py`).
+- Les **nuages et ombres** sont exclus par la bande de classification `SCL` de
+  Sentinel-2 L2A (seules les classes 4 « végétation » et 5 « sol nu » sont
+  gardées). `dataMask` seul ne détecte pas les nuages. ⚠️ Non testé contre le vrai
+  service : à valider sur des images réelles.
+- Chaque analyse contient `result.data_quality` (`valid_pixel_ratio`,
+  `low_quality`). Sous 60 % de pixels exploitables l'analyse est signalée comme peu
+  fiable ; sous 20 % elle est refusée (422).
+- Les seuils `critical` / `warning` doivent être finis, compris entre -1 et 1, avec
+  `critical < warning`, et sont appliqués par les deux méthodes (grille et k-means).
+- ⚠️ Les seuils par défaut (0,35 / 0,55) sont uniques pour toutes les cultures et
+  tous les stades : **ils doivent être validés par un agronome** avant tout usage réel.
+
+**Limites (protection contre les abus et les coûts Sentinel Hub)**
+
+| Limite | Valeur | Réglage |
+|---|---|---|
+| Sommets d'un polygone | 500 | `MAX_POLYGON_VERTICES` (`fields.py`) |
+| Surface d'une parcelle / de son rectangle englobant | 1 000 ha / 4 000 ha | `MAX_FIELD_AREA_HA`, `MAX_BBOX_AREA_HA` |
+| Résolution minimale | 10 m (natif Sentinel-2) | `MIN_RESOLUTION_M` (`api.py`) |
+| Analyses par champ | 200 | `MAX_ANALYSES_PER_FIELD` |
+| Fréquence de création d'analyses | 60 par heure et par IP | variable `ANALYSIS_RATE_LIMIT` |
+| Taille d'une requête | 1 Mo (Content-Length) | variable `MAX_BODY_BYTES` ; à doubler sur le reverse proxy |
+| Liste des analyses | 20 par page (max 100) | paramètres `limit` et `offset` |
+
+## Droits des personnes (RGPD)
+
+| Besoin | Route | Interface |
+|---|---|---|
+| Récupérer ses données | `GET /account/export` (JSON) | « Mes champs » → *Télécharger mes données* |
+| Supprimer son compte et tout ce qui s'y rattache | `POST /account/delete` avec `{"password": "..."}` | « Mes champs » → *Supprimer mon compte* |
+| Supprimer une parcelle (avec ses analyses et traitements) | `DELETE /fields/{id}` | API seulement |
+
+L'effacement est réel dans le fichier SQLite (`secure_delete`), un jeton de session d'un compte supprimé
+n'est plus accepté, et les journaux ne contiennent plus d'email en clair (`email_hash`). Ce qui n'est
+**pas** couvert (sauvegardes, journaux, services tiers) et ce qu'il reste à faire côté juridique sont
+détaillés dans [`docs/RGPD.md`](docs/RGPD.md).
+
 ## Choix de sécurité à noter
 
 - Mots de passe hachés en PBKDF2-HMAC-SHA256 avec sel aléatoire (pas de
@@ -245,6 +287,25 @@ majeure tant que le cœur métier n'est pas pleinement stabilisé.
   copiez `.env.example` en `.env`. En production, ne définissez pas
   `ENV=development` et fournissez un vrai secret
   (`python -c "import secrets; print(secrets.token_urlsafe(48))"`).
+- **Tokens** : signés en HS256 avec PyJWT (`python-jose` a été retiré : faille connue sans
+  correctif). `exp` et `sub` sont exigés, et `JWT_SECRET_KEY` doit faire **au moins 32
+  caractères** hors `ENV=development`.
+- **Mots de passe** : PBKDF2-SHA256, 600 000 itérations. Le coût est stocké avec le hash ; les
+  anciens comptes (260 000) sont migrés automatiquement à leur prochaine connexion. Un email
+  inconnu dépense le même temps de calcul qu'un compte existant (pas d'énumération par le temps
+  de réponse).
+- **En-têtes HTTP** : `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`,
+  HSTS hors développement, et une **Content-Security-Policy** sur les pages HTML (`connect-src
+  'self'` empêche d'envoyer le token vers un serveur tiers). Pour tester la politique sur de vrais
+  appareils sans rien bloquer : `CSP_REPORT_ONLY=1`. Si vous ajoutez une ressource externe
+  (police, tuiles, script), ajoutez son hôte à `CONTENT_SECURITY_POLICY` dans `api.py` : un test
+  vérifie que toutes les pages restent couvertes.
+- **Pas de CDN pour le code** : Leaflet et Leaflet.draw sont hébergés dans `static/vendor/` (voir
+  `static/vendor/README.md` pour la provenance et la mise à jour).
+- `/docs`, `/redoc` et `/openapi.json` ne sont servis qu'avec `ENV=development`. `/health` ne
+  renvoie que `status` et `database` (vérifiée réellement ; 503 si la base ne répond pas).
+- Ce que le front affiche venant de l'API passe par `textContent` ou `escapeHtml()`, jamais par
+  `innerHTML` brut.
 - Le CORS est désormais limité par défaut à des origines locales sûres
   (`localhost` / `127.0.0.1` sur les ports 3000 et 8000), avec possibilité
   de surcharger la liste via `CORS_ALLOWED_ORIGINS`.

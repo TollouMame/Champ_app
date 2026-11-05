@@ -44,10 +44,13 @@ def run_pipeline(
     method="kmeans" : n_zones zones homogènes réelles (recommandé pour de vraies
                       recommandations agronomiques, cf. compare_zoning.py)
     """
+    resolved_thresholds = get_thresholds(thresholds)  # lève ValueError si seuils invalides
     indices_rasters = compute_all_indices(bands)
 
     if method == "kmeans":
-        label_map, ndvi_zones = segment_zones_kmeans(indices_rasters["ndvi"], n_zones=n_zones)
+        label_map, ndvi_zones = segment_zones_kmeans(
+            indices_rasters["ndvi"], n_zones=n_zones, thresholds=resolved_thresholds
+        )
         ndre_by_zone = stats_for_other_raster(indices_rasters["ndre"], label_map, ndvi_zones)
         merged = [{
             "id": z["id"],
@@ -61,7 +64,6 @@ def run_pipeline(
         # (chaque cellule = index dans `merged`, -1 = pas de donnée)
         label_grid = {"rows": 30, "cols": 40, "data": downsample_label_map(label_map, 30, 40)}
     else:
-        resolved_thresholds = get_thresholds(thresholds)
         ndvi_zones = annotate_zones(split_into_zones(indices_rasters["ndvi"], n_rows, n_cols), resolved_thresholds)
         ndre_zones = annotate_zones(split_into_zones(indices_rasters["ndre"], n_rows, n_cols), resolved_thresholds)
         merged = [{
@@ -70,13 +72,13 @@ def run_pipeline(
             "ndre": round(zr["mean_value"], 3) if not np.isnan(zr["mean_value"]) else None,
             "status": zv["status"],
             "valid_pixel_ratio": zv["valid_pixel_ratio"],
-        } for zv, zr in zip(ndvi_zones, ndre_zones)]
+        } for zv, zr in zip(ndvi_zones, ndre_zones, strict=True)]
         grid_info = {"method": "grid", "rows": n_rows, "cols": n_cols}
 
     alerts = [z for z in merged if z["status"] == "critical"]
 
     return {
-        "thresholds_used": get_thresholds(thresholds),
+        "thresholds_used": resolved_thresholds,
         "grid": grid_info,
         "zones": merged,
         "alert_count": len(alerts),

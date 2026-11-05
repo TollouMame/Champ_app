@@ -5,7 +5,7 @@ fastapi
 uvicorn[standard]
 email-validator
 httpx
-python-jose[cryptography]
+PyJWT
 scikit-learn
 slowapi
 # optionnel : uniquement pour régénérer les icônes (generate_icons.py)

@@ -72,7 +72,7 @@ def run_pipeline(
             "ndre": round(zr["mean_value"], 3) if not np.isnan(zr["mean_value"]) else None,
             "status": zv["status"],
             "valid_pixel_ratio": zv["valid_pixel_ratio"],
-        } for zv, zr in zip(ndvi_zones, ndre_zones)]
+        } for zv, zr in zip(ndvi_zones, ndre_zones, strict=True)]
         grid_info = {"method": "grid", "rows": n_rows, "cols": n_cols}
 
     alerts = [z for z in merged if z["status"] == "critical"]

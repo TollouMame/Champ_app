@@ -78,7 +78,7 @@ def register_user(db_path: str | Path, email: str, password: str) -> int:
         conn.commit()
         return cursor.lastrowid
     except sqlite3.IntegrityError:
-        raise AuthError("Un compte existe déjà avec cet email.")
+        raise AuthError("Un compte existe déjà avec cet email.") from None
     finally:
         conn.close()
 

@@ -37,7 +37,7 @@ from src.geometry import LOW_QUALITY_PIXEL_RATIO, MIN_VALID_PIXEL_RATIO, prepare
 from src.logging_config import setup_logging, get_logger
 from src.main import run_pipeline
 from src.zoning import get_thresholds
-from src.tokens import is_development_environment, is_production_environment
+from src.tokens import is_development_environment
 
 load_environment()
 setup_logging()

@@ -105,3 +105,27 @@ def test_analysis_label_grid_matches_the_declared_dimensions(client):
     field_id = client.post("/fields", headers=headers, json={"name": "P", "crop": "Orge", "bbox": [1.5, 48.3, 1.505, 48.304]}).json()["id"]
     grid = client.post(f"/fields/{field_id}/analyses", headers=headers, json={"method": "kmeans"}).json()["result"]["label_grid"]
     assert grid["rows"] == len(grid["data"]) and grid["cols"] == len(grid["data"][0])
+
+
+# ---------------------------------------------------------------- démonstration aux proportions du champ
+
+def test_synthetic_raster_follows_the_field_shape():
+    from src.demo_data import synthetic_size_for_bbox
+
+    # 4 : 1 en mètres (à 48° de latitude, 1° de longitude vaut ~0,67 fois 1° de latitude)
+    height, width = synthetic_size_for_bbox((1.5, 48.3, 1.524, 48.304))
+    assert width == 160 and 36 <= height <= 44
+    assert synthetic_size_for_bbox((1.5, 48.3, 1.504, 48.3112))[0] == 160                       # champ haut : côté long = hauteur
+    assert synthetic_size_for_bbox((1.5, 48.3, 1.5, 48.3))[0] >= 32                             # dégénéré : jamais de trame vide
+    assert min(synthetic_size_for_bbox((1.5, 48.3, 1.9, 48.3002))) == 32                        # très allongé : côté court borné
+
+
+def test_demo_analysis_label_grid_has_the_proportions_of_a_long_field(client):
+    token = client.post("/auth/register", json={"email": "long@example.fr", "password": "motdepasse123"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    field_id = client.post("/fields", headers=headers, json={"name": "Long", "crop": "Orge", "bbox": [1.5, 48.3, 1.524, 48.304]}).json()["id"]
+    grid = client.post(f"/fields/{field_id}/analyses", headers=headers, json={"method": "kmeans"}).json()["result"]["label_grid"]
+    assert grid["cols"] == 40 and 8 <= grid["rows"] <= 12            # ~ 4:1, plus la grille fixe 30 x 40
+    tall = client.post("/fields", headers=headers, json={"name": "Haut", "crop": "Orge", "bbox": [1.5, 48.3, 1.504, 48.3112]}).json()["id"]
+    grid = client.post(f"/fields/{tall}/analyses", headers=headers, json={"method": "kmeans"}).json()["result"]["label_grid"]
+    assert grid["rows"] == 30 and grid["cols"] < 15

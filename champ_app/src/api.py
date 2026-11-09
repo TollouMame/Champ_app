@@ -31,7 +31,7 @@ from src.analyses import save_analysis, list_analyses, count_analyses
 from src.treatments import save_treatment, list_treatments, TreatmentError
 from src.fields import register_field, list_fields, get_field, FieldError, CROPS_DISPONIBLES
 from src.config import load_environment
-from src.demo_data import generate_synthetic_bands
+from src.demo_data import generate_synthetic_bands, synthetic_size_for_bbox
 from src.fetch_sentinel import SentinelHubConfigError, fetch_field_bands
 from src.geometry import LOW_QUALITY_PIXEL_RATIO, MIN_VALID_PIXEL_RATIO, prepare_bands
 from src.privacy import delete_field, delete_user_account, export_user_data, pseudonymize_email
@@ -533,7 +533,10 @@ def api_create_analysis(
     except ValueError as exc:
         _raise_api_error(422, "validation_error", str(exc))
     if payload.source == "synthetic":
-        bands = generate_synthetic_bands(seed=field_id)
+        demo_height, demo_width = synthetic_size_for_bbox(
+            (field["bbox_min_lon"], field["bbox_min_lat"], field["bbox_max_lon"], field["bbox_max_lat"])
+        )
+        bands = generate_synthetic_bands(height=demo_height, width=demo_width, seed=field_id)
     else:
         bbox = (
             field["bbox_min_lon"],

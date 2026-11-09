@@ -24,6 +24,28 @@ _DUMMY_SALT = bytes(16)
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MAX_EMAIL_LENGTH = 254  # limite standard RFC 5321
 MAX_PASSWORD_LENGTH = 128  # évite un coût PBKDF2 excessif sur une entrée très longue
+MIN_PASSWORD_LENGTH = 8
+MIN_DISTINCT_CHARACTERS = 4
+# Mots de passe triviaux refusés. Liste volontairement courte et évidente ; doit rester
+# identique à COMMON_PASSWORDS dans static/onboarding_mobile.html (un test le vérifie).
+COMMON_PASSWORDS = frozenset({
+    "password", "motdepasse", "12345678", "123456789", "1234567890",
+    "azertyuiop", "qwertyuiop", "00000000", "11111111",
+})
+
+
+def validate_password(password: str) -> None:
+    """Règles de création d'un mot de passe. Lève AuthError avec un message prêt à afficher."""
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise AuthError(f"Le mot de passe doit contenir au moins {MIN_PASSWORD_LENGTH} caractères.")
+    if len(password) > MAX_PASSWORD_LENGTH:
+        raise AuthError(f"Le mot de passe ne peut pas dépasser {MAX_PASSWORD_LENGTH} caractères.")
+    if not password.strip():
+        raise AuthError("Le mot de passe ne peut pas être composé uniquement d'espaces.")
+    if len(set(password.lower())) < MIN_DISTINCT_CHARACTERS:
+        raise AuthError(f"Mot de passe trop simple : utilisez au moins {MIN_DISTINCT_CHARACTERS} caractères différents.")
+    if password.lower() in COMMON_PASSWORDS:
+        raise AuthError("Ce mot de passe est trop courant : choisissez-en un autre.")
 
 
 class AuthError(Exception):
@@ -62,10 +84,7 @@ def register_user(db_path: str | Path, email: str, password: str) -> int:
         raise AuthError("Adresse email invalide.")
     if len(email) > MAX_EMAIL_LENGTH:
         raise AuthError("Adresse email trop longue.")
-    if len(password) < 8:
-        raise AuthError("Le mot de passe doit contenir au moins 8 caractères.")
-    if len(password) > MAX_PASSWORD_LENGTH:
-        raise AuthError(f"Le mot de passe ne peut pas dépasser {MAX_PASSWORD_LENGTH} caractères.")
+    validate_password(password)
 
     password_hash, salt = _hash_password(password)
 

@@ -9,6 +9,23 @@ pour pouvoir tester tout le pipeline de calcul d'indices et de zonage.
 import numpy as np
 
 
+def synthetic_size_for_bbox(bbox: tuple[float, float, float, float], long_side: int = 160, min_side: int = 32) -> tuple[int, int]:
+    """(hauteur, largeur) d'une trame de démonstration qui a les PROPORTIONS RÉELLES du champ.
+
+    Avant, la démonstration était toujours en 120 x 160 : un champ en longueur était étiré en
+    4:3 sur la carte. Le côté court est borné (min_side) pour que le coin masqué de la
+    démonstration ne recouvre jamais toute la trame.
+    """
+    import math
+
+    min_lon, min_lat, max_lon, max_lat = bbox
+    width_m = max((max_lon - min_lon) * 111_320 * math.cos(math.radians((min_lat + max_lat) / 2)), 1e-9)
+    height_m = max((max_lat - min_lat) * 111_320, 1e-9)
+    if width_m >= height_m:
+        return max(min_side, round(long_side * height_m / width_m)), long_side
+    return long_side, max(min_side, round(long_side * width_m / height_m))
+
+
 def generate_synthetic_bands(height: int = 120, width: int = 160, seed: int = 0) -> np.ndarray:
     """
     Retourne un array (H, W, 4) = [B04 (rouge), B05 (red edge), B08 (NIR), dataMask]

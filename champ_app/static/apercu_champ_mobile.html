@@ -614,6 +614,15 @@ function renderMap(){
 
   if(isBlobMap){
     gridEl.style.gridTemplateColumns = `repeat(${labelGrid.cols}, 1fr)`;
+    // Les cases de la carte par zones sont des div VIDES : sans hauteur imposée, la grille mesurait
+    // 0 px de haut et la carte disparaissait (seule la carte de démonstration, dont les cases ont
+    // un aspect carré, s'affichait). La hauteur vient des proportions de la grille, qui sont celles
+    // du champ ; la largeur est bornée pour qu'un champ très haut ne dépasse pas ~60 % de l'écran.
+    gridEl.style.gridTemplateRows = `repeat(${labelGrid.rows}, 1fr)`;
+    gridEl.style.aspectRatio = `${labelGrid.cols} / ${labelGrid.rows}`;
+    gridEl.style.maxWidth = `${(60 * labelGrid.cols / labelGrid.rows).toFixed(1)}vh`;
+    gridEl.style.marginLeft = 'auto';
+    gridEl.style.marginRight = 'auto';
     const cr = Math.floor(labelGrid.rows/2), cc = Math.floor(labelGrid.cols/2);
 
     labelGrid.data.forEach((row, r)=>{
@@ -631,6 +640,8 @@ function renderMap(){
     });
   } else {
     gridEl.style.gridTemplateColumns = `repeat(${COLS}, 1fr)`;
+    // la carte de démonstration a des cases carrées : on retire les réglages de la carte par zones
+    ['gridTemplateRows', 'aspectRatio', 'maxWidth', 'marginLeft', 'marginRight'].forEach(prop => { gridEl.style[prop] = ''; });
     cells.forEach(cell=>{
       const div = document.createElement('div');
       div.className = 'cell' + (cell===currentCell ? ' you' : '');

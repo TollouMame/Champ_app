@@ -130,7 +130,7 @@ def test_grid_pipeline_returns_none_instead_of_nan_on_fully_masked_raster():
 def test_analyses_endpoint_returns_clean_422_on_unusable_image(monkeypatch, tmp_path):
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-pour-la-suite-de-tests-0123456789")
     monkeypatch.setattr(api, "DB_PATH", tmp_path / "app.db")
-    monkeypatch.setattr(api, "generate_synthetic_bands", lambda seed: _fully_masked_bands())
+    monkeypatch.setattr(api, "generate_synthetic_bands", lambda seed=0, **_: _fully_masked_bands())
 
     with TestClient(api.app) as client:
         headers = _register_and_get_headers(client, "masked.user@example.fr")

@@ -291,10 +291,12 @@
     <div class="field-error" id="err-email"></div>
 
     <label for="password">Mot de passe</label>
-    <input type="password" id="password" placeholder="8 caractères minimum">
+    <input type="password" id="password" placeholder="8 caractères minimum" autocomplete="new-password">
     <div class="field-error" id="err-password"></div>
+    <div class="subtext" id="password-hint" style="margin:-4px 0 4px">8 à 128 caractères, pas uniquement des espaces, au moins 4 caractères différents.</div>
 
     <button class="primary-btn" id="btn-signup">Créer mon compte</button>
+    <div class="field-error" id="err-signup" role="alert"></div>
     <button class="link-btn" id="btn-back-welcome-2">Retour</button>
   </div>
 
@@ -350,7 +352,7 @@
 </div>
 
 <script>
-const state = { email:'', name:'', crop:'', areaHa:0, polygon:null, userId:null, token:null, apiOnline:false };
+const state = { email:'', name:'', crop:'', areaHa:0, polygon:null, userId:null, token:null };
 
 // URL de l'API — à adapter si le serveur tourne ailleurs qu'en local.
 // Lancer le serveur : uvicorn src.api:app --reload --port 8000
@@ -472,7 +474,6 @@ document.getElementById('btn-login').addEventListener('click', async ()=>{
     state.userId = data.user_id;
     state.token = data.access_token;
     state.email = email;
-    state.apiOnline = true;
     saveSession();
     document.getElementById('err-login-password').textContent = '';
     await enterFieldsList();
@@ -601,7 +602,6 @@ document.getElementById('btn-delete-account').addEventListener('click', async ()
   state.email = saved.email;
   try{
     await apiCall('/fields', { method:'GET' }); // sert juste à vérifier que le token est encore valide
-    state.apiOnline = true;
     await enterFieldsList();
   } catch(err){
     // token expiré, révoqué, ou API injoignable au démarrage -> repli propre sur l'accueil
@@ -616,56 +616,89 @@ document.getElementById('btn-delete-account').addEventListener('click', async ()
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const EMAIL_RE_CHECK = (v) => EMAIL_RE.test(v);
 
-document.getElementById('btn-signup').addEventListener('click', async ()=>{
+// Règles de création d'un mot de passe : IDENTIQUES à validate_password() dans auth.py
+// (le serveur reste la source de vérité ; un test vérifie que les deux restent alignés).
+const MIN_PASSWORD_LENGTH = 8;
+const MAX_PASSWORD_LENGTH = 128;
+const MIN_DISTINCT_CHARACTERS = 4;
+const COMMON_PASSWORDS = ['password', 'motdepasse', '12345678', '123456789', '1234567890', 'azertyuiop', 'qwertyuiop', '00000000', '11111111'];
+
+function validatePassword(password){
+  // retourne un message d'erreur, ou '' si le mot de passe est acceptable
+  if(password.length < MIN_PASSWORD_LENGTH) return 'Le mot de passe doit contenir au moins ' + MIN_PASSWORD_LENGTH + ' caractères.';
+  if(password.length > MAX_PASSWORD_LENGTH) return 'Le mot de passe ne peut pas dépasser ' + MAX_PASSWORD_LENGTH + ' caractères.';
+  if(!password.trim()) return "Le mot de passe ne peut pas être composé uniquement d'espaces.";
+  if(new Set(Array.from(password.toLowerCase())).size < MIN_DISTINCT_CHARACTERS) return 'Mot de passe trop simple : utilisez au moins ' + MIN_DISTINCT_CHARACTERS + ' caractères différents.';
+  if(COMMON_PASSWORDS.includes(password.toLowerCase())) return 'Ce mot de passe est trop courant : choisissez-en un autre.';
+  return '';
+}
+
+function signupProblems(){
   const email = document.getElementById('email').value.trim();
   const password = document.getElementById('password').value;
-  let ok = true;
+  return { email: EMAIL_RE.test(email) ? '' : 'Adresse email invalide.', password: validatePassword(password) };
+}
 
-  if(!EMAIL_RE.test(email)){
-    document.getElementById('err-email').textContent = 'Adresse email invalide.';
-    ok = false;
-  } else {
-    document.getElementById('err-email').textContent = '';
-  }
+// Une fois une erreur affichée, elle se met à jour en direct pendant la saisie.
+document.getElementById('email').addEventListener('input', ()=>{
+  document.getElementById('err-signup').textContent = '';
+  if(document.getElementById('err-email').textContent) document.getElementById('err-email').textContent = signupProblems().email;
+});
+document.getElementById('password').addEventListener('input', ()=>{
+  document.getElementById('err-signup').textContent = '';
+  if(document.getElementById('err-password').textContent) document.getElementById('err-password').textContent = signupProblems().password;
+});
 
-  if(password.length < 8){
-    document.getElementById('err-password').textContent = 'Le mot de passe doit contenir au moins 8 caractères.';
-    ok = false;
-  } else {
-    document.getElementById('err-password').textContent = '';
-  }
+let signupInProgress = false;
+document.getElementById('btn-signup').addEventListener('click', async ()=>{
+  if(signupInProgress) return;
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  const errSignup = document.getElementById('err-signup');
 
-  if(ok){
-    const btn = document.getElementById('btn-signup');
-    btn.disabled = true;
-    btn.textContent = 'Création en cours…';
-    try{
-      const data = await apiCall('/auth/register', {
-        method:'POST',
-        body: JSON.stringify({ email, password })
-      });
-      state.userId = data.user_id;
-      state.token = data.access_token;
-      state.apiOnline = true;
-      state.email = email;
-      saveSession();
-      await enterAddField();
-    } catch(err){
-      if(err instanceof TypeError){
-        // fetch a échoué avant même d'atteindre le serveur : probablement hors-ligne / API non lancée
-        document.getElementById('err-email').textContent =
-          'API injoignable (' + API_BASE + ') — poursuite en mode démo local.';
-        state.apiOnline = false;
-        state.email = email;
-        await enterAddField();
-      } else {
-        // erreur renvoyée par le serveur lui-même (ex: email déjà pris)
-        document.getElementById('err-email').textContent = err.message;
-      }
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Créer mon compte';
+  const problems = signupProblems();
+  document.getElementById('err-email').textContent = problems.email;
+  document.getElementById('err-password').textContent = problems.password;
+  errSignup.textContent = '';
+  // On n'avance JAMAIS tant que les conditions ne sont pas remplies.
+  if(problems.email || problems.password) return;
+
+  const btn = document.getElementById('btn-signup');
+  signupInProgress = true;
+  btn.disabled = true;
+  btn.textContent = 'Création en cours…';
+
+  let created = false;
+  try{
+    const data = await apiCall('/auth/register', { method:'POST', body: JSON.stringify({ email, password }) });
+    // Le compte n'existe pour l'application qu'une fois CONFIRMÉ par le serveur (jeton reçu).
+    if(!data || !data.access_token || !data.user_id){
+      throw new Error('Réponse inattendue du serveur : compte non confirmé.');
     }
+    state.userId = data.user_id;
+    state.token = data.access_token;
+    state.email = email;
+    saveSession();
+    created = true;
+  } catch(err){
+    // Aucune poursuite « en mode démo » : un échec reste un échec, visible, sur cet écran.
+    errSignup.textContent = err instanceof TypeError
+      ? "Impossible de joindre le serveur. Vérifiez votre connexion et que l'API est lancée, puis réessayez."
+      : err.message;
+  } finally {
+    signupInProgress = false;
+    btn.disabled = false;
+    btn.textContent = 'Créer mon compte';
+  }
+  if(!created) return;
+
+  try{
+    await enterAddField();
+  } catch(err){
+    // Le compte EST créé : un problème d'affichage de la carte ne doit pas le faire passer pour un échec réseau.
+    console.warn("Impossible d'ouvrir l'écran de dessin du champ :", err);
+    alert("Votre compte est créé. L'écran de dessin du champ n'a pas pu s'ouvrir (" + err.message + "). Vous pouvez réessayer depuis « Mes champs ».");
+    await enterFieldsList();
   }
 });
 
@@ -738,11 +771,18 @@ function updatePolygonFromLayer(layer){
 }
 
 async function enterAddField(){
+  if(!state.token){
+    // pas de compte confirmé : on ne montre pas l'écran de création de champ
+    showStep('welcome');
+    return;
+  }
   showStep(2);
   await loadCropsIntoSelect();
   if(!leafletMap){
-    const center = await getDeviceLocation();
-    initLeafletMap(center.lat, center.lon);
+    // La carte est utilisable immédiatement (position par défaut) ; la géolocalisation, qui peut
+    // attendre une réponse de l'utilisateur sans fin, ne fait que la recentrer ensuite.
+    initLeafletMap(FALLBACK_LOCATION.lat, FALLBACK_LOCATION.lon);
+    centerMapOnDevice();
   }
   // la carte doit être visible dans le DOM avant ce recalcul de taille,
   // sinon Leaflet affiche une tuile grise/mal dimensionnée
@@ -776,7 +816,13 @@ document.getElementById('btn-save-field').addEventListener('click', async ()=>{
   btn.disabled = true;
   btn.textContent = 'Enregistrement…';
 
-  if(state.apiOnline && state.userId){
+  if(!state.token){
+    document.getElementById('err-draw').textContent = 'Votre session a expiré : reconnectez-vous pour enregistrer ce champ.';
+    btn.disabled = false;
+    btn.textContent = 'Enregistrer ce champ';
+    return;
+  }
+  {
     try{
       const field = await apiCall('/fields', {
         method:'POST',
@@ -787,6 +833,7 @@ document.getElementById('btn-save-field').addEventListener('click', async ()=>{
           sowing_date: document.getElementById('field-sowing').value || null
         })
       });
+      if(!field || !field.id){ throw new Error('Réponse inattendue du serveur : champ non confirmé.'); }
       state.fieldId = field.id;
       state.areaHa = field.area_ha; // surface recalculée côté serveur (formule du lacet), source de vérité
       document.getElementById('err-draw').textContent = '';
@@ -797,7 +844,7 @@ document.getElementById('btn-save-field').addEventListener('click', async ()=>{
       return;
     }
   }
-  // si l'API est hors-ligne, on continue en local avec la surface calculée côté client
+  // ici le serveur a confirmé l'enregistrement : le récapitulatif ne s'affiche qu'à cette condition
 
   document.getElementById('s-name').textContent = state.name;
   document.getElementById('s-crop').textContent = state.crop;
@@ -815,20 +862,31 @@ const FALLBACK_LOCATION = { lat: 48.304, lon: 1.5025 };
 function getDeviceLocation(){
   return new Promise(resolve=>{
     if(!navigator.geolocation){ resolve(FALLBACK_LOCATION); return; }
+    // Le « timeout » de getCurrentPosition ne démarre QU'APRÈS l'accord de l'utilisateur : tant que la
+    // fenêtre « Autoriser la localisation ? » reste sans réponse, aucun rappel n'est appelé et la
+    // promesse ne se résoudrait jamais. Ce minuteur la résout quoi qu'il arrive.
+    const giveUp = setTimeout(()=> resolve(FALLBACK_LOCATION), 4000);
     navigator.geolocation.getCurrentPosition(
-      pos => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
-      () => resolve(FALLBACK_LOCATION),
+      pos => { clearTimeout(giveUp); resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }); },
+      () => { clearTimeout(giveUp); resolve(FALLBACK_LOCATION); },
       { timeout: 3000 }
     );
   });
 }
 
+// Recentre la carte sur l'appareil SANS jamais bloquer son affichage, et sans écraser ce que
+// l'utilisateur a déjà fait (déplacement de la carte, contour commencé).
+function centerMapOnDevice(){
+  let userMovedMap = false;
+  leafletMap.once('dragstart', ()=>{ userMovedMap = true; });
+  getDeviceLocation().then(pos => {
+    if(!leafletMap || userMovedMap || (drawnItems && drawnItems.getLayers().length > 0)) return;
+    leafletMap.setView([pos.lat, pos.lon], 17);
+  });
+}
+
 document.getElementById('btn-goto-dashboard').addEventListener('click', async ()=>{
-  if(state.apiOnline && state.token){
-    await enterFieldsList();
-  } else {
-    alert('Champ enregistré en local uniquement (API hors-ligne) — impossible de charger "Mes champs" sans connexion au serveur.');
-  }
+  await enterFieldsList();
 });
 
 // enregistrement du service worker (condition d'installabilité PWA sur Android/Chrome)

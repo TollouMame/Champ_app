@@ -62,7 +62,8 @@ def run_pipeline(
         grid_info = {"method": "kmeans", "n_zones": len(ndvi_zones)}
         # grille basse résolution pour un rendu visuel côté app mobile
         # (chaque cellule = index dans `merged`, -1 = pas de donnée)
-        label_grid = {"rows": 30, "cols": 40, "data": downsample_label_map(label_map, 30, 40)}
+        grid_data = downsample_label_map(label_map, 30, 40)
+        label_grid = {"rows": len(grid_data), "cols": len(grid_data[0]), "data": grid_data}
     else:
         ndvi_zones = annotate_zones(split_into_zones(indices_rasters["ndvi"], n_rows, n_cols), resolved_thresholds)
         ndre_zones = annotate_zones(split_into_zones(indices_rasters["ndre"], n_rows, n_cols), resolved_thresholds)

@@ -274,8 +274,11 @@ def api_health():
 # ---------- schémas de requête/réponse ----------
 
 class RegisterRequest(BaseModel):
-    email: str = Field(max_length=254)
-    password: str = Field(max_length=128)
+    # Limites larges : elles ne servent qu'à borner la mémoire. Les vraies règles (et leurs
+    # messages en français) sont dans auth.py ; avec max_length=128 ici, Pydantic répondait
+    # « String should have at most 128 characters » en anglais, affiché sous le champ email.
+    email: str = Field(max_length=1024)
+    password: str = Field(max_length=1024)
 
 
 class AuthResponse(BaseModel):
@@ -322,7 +325,7 @@ class AnalysisRequest(BaseModel):
 
 
 class AccountDeleteRequest(BaseModel):
-    password: str = Field(max_length=128)
+    password: str = Field(max_length=1024)  # borne mémoire seulement ; la vérification fait le reste
 
 
 class ZoneTreatmentRequest(BaseModel):

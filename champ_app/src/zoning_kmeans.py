@@ -106,18 +106,27 @@ def segment_zones_kmeans(
 
 def downsample_label_map(label_map: np.ndarray, out_rows: int = 30, out_cols: int = 40) -> list[list[int]]:
     """
-    Réduit le raster de labels (H, W) à une grille out_rows x out_cols par
-    échantillonnage au plus proche voisin — suffisant pour un rendu visuel
-    mobile sans transmettre chaque pixel satellite individuellement.
+    Réduit le raster de labels (H, W) en une grille qui tient dans out_rows x out_cols,
+    par échantillonnage au plus proche voisin — suffisant pour un rendu visuel mobile
+    sans transmettre chaque pixel satellite individuellement.
+
+    Les PROPORTIONS du raster sont conservées : un champ en longueur donne une grille en
+    longueur (avant, tout champ était étiré dans une grille fixe de 30 x 40, ce qui
+    déformait sa forme). Chaque case prend la valeur du pixel situé en son centre.
 
     Retourne une liste de listes d'entiers (index de zone, -1 = pas de donnée),
     directement sérialisable en JSON.
     """
     h, w = label_map.shape
-    row_idx = np.linspace(0, h - 1, out_rows).astype(int)
-    col_idx = np.linspace(0, w - 1, out_cols).astype(int)
-    downsampled = label_map[np.ix_(row_idx, col_idx)]
-    return downsampled.tolist()
+    if w * out_rows >= h * out_cols:      # raster plus large que la zone cible : limité par les colonnes
+        cols = out_cols
+        rows = max(1, round(out_cols * h / w))
+    else:                                 # plus haut : limité par les lignes
+        rows = out_rows
+        cols = max(1, round(out_rows * w / h))
+    row_idx = np.minimum(((np.arange(rows) + 0.5) * h / rows).astype(int), h - 1)
+    col_idx = np.minimum(((np.arange(cols) + 0.5) * w / cols).astype(int), w - 1)
+    return label_map[np.ix_(row_idx, col_idx)].tolist()
 
 
 def stats_for_other_raster(raster: np.ndarray, label_map: np.ndarray, zones: list[dict]) -> dict[str, float | None]:

@@ -10,6 +10,7 @@ Documentation interactive générée automatiquement : http://localhost:8000/doc
 import os
 import time
 import uuid
+import datetime as dt
 from datetime import date
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Depends, Header, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter
@@ -27,14 +28,14 @@ from slowapi.util import get_remote_address
 from src import tokens as tokens_module
 from src.db import get_connection, init_db
 from src.auth import register_user, authenticate_user, AuthError, get_user
-from src.analyses import save_analysis, list_analyses, count_analyses
+from src.analyses import save_analysis, list_analyses, count_analyses, find_identical_analysis
 from src.treatments import save_treatment, list_treatments, TreatmentError
 from src.fields import register_field, list_fields, get_field, FieldError, CROPS_DISPONIBLES
 from src.config import load_environment
 from src.demo_data import generate_synthetic_bands, synthetic_size_for_bbox
 from src.fetch_sentinel import SentinelHubConfigError, fetch_field_bands
 from src.geometry import LOW_QUALITY_PIXEL_RATIO, MIN_VALID_PIXEL_RATIO, prepare_bands
-from src.privacy import delete_field, delete_user_account, export_user_data, pseudonymize_email
+from src.privacy import delete_analysis, delete_field, delete_user_account, export_user_data, pseudonymize_email
 from src.logging_config import setup_logging, get_logger
 from src.main import run_pipeline
 from src.zoning import get_thresholds
@@ -73,6 +74,10 @@ def get_auth_rate_limit() -> str:
     return os.environ.get("AUTH_RATE_LIMIT", "10/minute")
 
 
+def _today_utc() -> date:
+    return dt.datetime.now(dt.timezone.utc).date()
+
+
 def get_export_rate_limit() -> str:
     """Limite d'export de données (coûteux : relit toutes les analyses du compte)."""
     return os.environ.get("EXPORT_RATE_LIMIT", "10/hour")
@@ -90,6 +95,24 @@ def get_max_body_bytes() -> int:
 # Nombre maximal d'analyses conservées par champ (stockage et coût Sentinel).
 MAX_ANALYSES_PER_FIELD = 200
 MIN_RESOLUTION_M = 10   # résolution native de Sentinel-2 : en dessous, on ne gagne rien et on coûte cher
+
+def user_or_ip_key(request: Request) -> str:
+    """Clé de limitation de débit : le COMPTE pour les routes authentifiées, l'adresse IP sinon.
+
+    Derrière un reverse proxy, l'adresse IP vue par l'application est souvent celle du proxy,
+    partagée par tous les utilisateurs : une limite « par IP » deviendrait une limite globale
+    (le 61e utilisateur de l'heure serait bloqué). Pour les routes d'authentification (login,
+    inscription), qui n'ont pas encore de compte, l'IP reste la seule clé : lancer uvicorn avec
+    --forwarded-allow-ips pour qu'elle soit la vraie adresse du client (voir README).
+    """
+    header = request.headers.get("authorization", "")
+    if header[:7].lower() == "bearer ":
+        try:
+            return f"user:{tokens_module.decode_access_token(header[7:].strip())}"
+        except tokens_module.TokenError:
+            pass
+    return get_remote_address(request)
+
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -232,9 +255,9 @@ def get_current_user_id(authorization: str = Header(None)) -> int:
     Dépendance FastAPI : extrait et vérifie le token JWT de l'en-tête
     'Authorization: Bearer <token>'. Lève 401 si absent ou invalide.
     """
-    if authorization is None or not authorization.startswith("Bearer "):
+    if authorization is None or authorization[:7].lower() != "bearer ":
         _raise_api_error(401, "authentication_error", "Token d'authentification manquant.")
-    token = authorization.removeprefix("Bearer ").strip()
+    token = authorization[7:].strip()
     try:
         user_id = tokens_module.decode_access_token(token)
     except tokens_module.TokenError as e:
@@ -390,7 +413,7 @@ def api_login(request: Request, payload: RegisterRequest):
 
 
 @app.get("/account/export")
-@limiter.limit(get_export_rate_limit)
+@limiter.limit(get_export_rate_limit, key_func=user_or_ip_key)
 def api_export_account(request: Request, user_id: int = Depends(get_current_user_id)):
     """Droit d'accès / portabilité : toutes les données du compte en JSON (sans mot de passe)."""
     data = export_user_data(get_db_path(), user_id)
@@ -408,7 +431,7 @@ def api_export_account(request: Request, user_id: int = Depends(get_current_user
 
 
 @app.post("/account/delete")
-@limiter.limit(get_auth_rate_limit)
+@limiter.limit(get_auth_rate_limit, key_func=user_or_ip_key)
 def api_delete_account(
     request: Request, payload: AccountDeleteRequest, user_id: int = Depends(get_current_user_id)
 ):
@@ -492,7 +515,9 @@ def _get_owned_field(field_id: int, user_id: int) -> dict:
 
 
 @app.post("/fields/{field_id}/analyses")
-@limiter.limit(get_analysis_rate_limit)
+# shared_limit + scope fixe : slowapi sépare sinon ses compteurs PAR URL, donc par champ
+# (/fields/1/analyses et /fields/2/analyses) : changer de champ contournait la limite.
+@limiter.shared_limit(get_analysis_rate_limit, scope="analyses", key_func=user_or_ip_key)
 def api_create_analysis(
     request: Request,
     field_id: int,
@@ -517,13 +542,6 @@ def api_create_analysis(
     if payload.resolution > 100:
         _raise_api_error(422, "validation_error", "resolution ne peut pas dépasser 100.")
 
-    if count_analyses(get_db_path(), field_id) >= MAX_ANALYSES_PER_FIELD:
-        _raise_api_error(
-            429,
-            "analysis_quota_exceeded",
-            f"Limite de {MAX_ANALYSES_PER_FIELD} analyses atteinte pour ce champ.",
-        )
-
     thresholds = {
         "critical": payload.critical_threshold,
         "warning": payload.warning_threshold,
@@ -532,11 +550,34 @@ def api_create_analysis(
         get_thresholds(thresholds)
     except ValueError as exc:
         _raise_api_error(422, "validation_error", str(exc))
+
+    parameters = payload.model_dump(mode="json")
+    if payload.source == "synthetic":
+        # Comme de vraies images satellite, les données de démonstration changent d'un JOUR à
+        # l'autre mais pas d'un clic à l'autre. Avant, la graine ne dépendait que du champ :
+        # « Actualiser » recréait à chaque clic une analyse strictement identique.
+        demo_date = payload.acquisition_date or _today_utc()
+        parameters["acquisition_date"] = demo_date.isoformat()
+        already = find_identical_analysis(get_db_path(), field_id, payload.source, payload.method, parameters)
+        if already is not None:
+            logger.info("analyse de démonstration réutilisée", extra={"field_id": field_id, "analysis_id": already["id"]})
+            return {**already, "reused": True}
+
+    if count_analyses(get_db_path(), field_id) >= MAX_ANALYSES_PER_FIELD:
+        _raise_api_error(
+            429,
+            "analysis_quota_exceeded",
+            f"Limite de {MAX_ANALYSES_PER_FIELD} analyses atteinte pour ce champ : "
+            "supprimez d'anciennes analyses (DELETE /fields/{id}/analyses/{analysis_id}).",
+        )
+
     if payload.source == "synthetic":
         demo_height, demo_width = synthetic_size_for_bbox(
             (field["bbox_min_lon"], field["bbox_min_lat"], field["bbox_max_lon"], field["bbox_max_lat"])
         )
-        bands = generate_synthetic_bands(height=demo_height, width=demo_width, seed=field_id)
+        bands = generate_synthetic_bands(
+            height=demo_height, width=demo_width, seed=field_id * 1_000_003 + demo_date.toordinal()
+        )
     else:
         bbox = (
             field["bbox_min_lon"],
@@ -610,14 +651,26 @@ def api_create_analysis(
             "alert_count": result.get("alert_count"),
         },
     )
-    return save_analysis(
+    saved = save_analysis(
         get_db_path(),
         field_id,
         source=payload.source,
         method=payload.method,
-        parameters=payload.model_dump(mode="json"),
+        parameters=parameters,
         result=result,
     )
+    return {**saved, "reused": False}
+
+
+@app.delete("/fields/{field_id}/analyses/{analysis_id}")
+def api_delete_analysis(field_id: int, analysis_id: int, user_id: int = Depends(get_current_user_id)):
+    """Supprime une analyse et les traitements marqués sur ses zones."""
+    _get_owned_field(field_id, user_id)
+    deleted = delete_analysis(get_db_path(), field_id, analysis_id)
+    if deleted is None:
+        _raise_api_error(404, "not_found", "Analyse introuvable.")
+    logger.info("analyse supprimée", extra={"user_id": user_id, "field_id": field_id, "analysis_id": analysis_id})
+    return {"deleted": True, "analysis_id": analysis_id, **deleted}
 
 
 @app.get("/fields/{field_id}/analyses")
@@ -730,4 +783,10 @@ def api_crops():
 # manifest.json et le service worker doivent être servis en HTTPS réel.
 # Monté APRÈS toutes les routes /api pour ne jamais les masquer.
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+@app.get("/", include_in_schema=False)
+def root():
+    """La racine renvoyait une erreur 404 JSON : on envoie sur l'écran d'accueil de l'application."""
+    return RedirectResponse("/onboarding_mobile.html", status_code=307)
+
+
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

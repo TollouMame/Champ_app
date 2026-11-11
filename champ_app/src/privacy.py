@@ -131,3 +131,19 @@ def delete_field(db_path: str | Path, field_id: int, user_id: int) -> dict | Non
         return deleted
     finally:
         conn.close()
+
+
+def delete_analysis(db_path: str | Path, field_id: int, analysis_id: int) -> dict | None:
+    """Supprime une analyse d'un champ (avec les traitements qui s'y rattachent).
+    Retourne ce qui a été supprimé, ou None si l'analyse n'existe pas pour ce champ."""
+    conn = get_connection(db_path)
+    try:
+        conn.execute("PRAGMA secure_delete = ON")
+        if _count(conn, "SELECT COUNT(*) FROM analyses WHERE id = ? AND field_id = ?", (analysis_id, field_id)) == 0:
+            return None
+        treatments = _count(conn, "SELECT COUNT(*) FROM zone_treatments WHERE analysis_id = ?", (analysis_id,))
+        conn.execute("DELETE FROM analyses WHERE id = ? AND field_id = ?", (analysis_id, field_id))
+        conn.commit()
+        return {"treatments": treatments}
+    finally:
+        conn.close()

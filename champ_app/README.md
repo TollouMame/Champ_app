@@ -250,9 +250,34 @@ majeure tant que le cœur métier n'est pas pleinement stabilisé.
 | Surface d'une parcelle / de son rectangle englobant | 1 000 ha / 4 000 ha | `MAX_FIELD_AREA_HA`, `MAX_BBOX_AREA_HA` |
 | Résolution minimale | 10 m (natif Sentinel-2) | `MIN_RESOLUTION_M` (`api.py`) |
 | Analyses par champ | 200 | `MAX_ANALYSES_PER_FIELD` |
-| Fréquence de création d'analyses | 60 par heure et par IP | variable `ANALYSIS_RATE_LIMIT` |
+| Fréquence de création d'analyses | 60 par heure **et par compte** (tous champs confondus) | variable `ANALYSIS_RATE_LIMIT` |
 | Taille d'une requête | 1 Mo (Content-Length) | variable `MAX_BODY_BYTES` ; à doubler sur le reverse proxy |
 | Liste des analyses | 20 par page (max 100) | paramètres `limit` et `offset` |
+
+### Analyses de démonstration, doublons et suppression
+
+- Les données de démonstration (`source: "synthetic"`) changent **d'un jour à l'autre** comme de vraies
+  images satellite, mais pas d'un clic à l'autre. Redemander une analyse identique (même champ, méthode,
+  paramètres, date) renvoie l'analyse existante avec `"reused": true` : rien n'est recréé et le quota
+  n'est pas consommé. Une `acquisition_date` différente donne de nouvelles données.
+- `DELETE /fields/{id}/analyses/{analysis_id}` supprime une analyse et les traitements marqués sur ses
+  zones (utile quand le quota de 200 analyses par champ est atteint).
+- Marquer deux fois la même zone d'une même analyse comme traitée ne crée pas de doublon
+  (`"already_recorded": true`), et une zone hors parcelle ou sans donnée est refusée.
+
+### Derrière un reverse proxy
+
+Les limites de débit des routes authentifiées (analyses, export, suppression de compte) sont **par
+compte**. Celles de connexion et d'inscription sont **par adresse IP** : derrière un proxy, l'application
+ne voit que l'adresse du proxy, partagée par tous les utilisateurs, et tout le monde se retrouverait bloqué
+dès la 11e connexion de la minute. Lancez uvicorn en lui faisant confiance pour lire l'adresse réelle :
+
+```bash
+uvicorn src.api:app --proxy-headers --forwarded-allow-ips="IP_DE_VOTRE_PROXY"
+```
+
+(`--forwarded-allow-ips="*"` si le proxy n'est pas joignable depuis Internet autrement que par lui.)
+`GET /` redirige vers l'application (`/onboarding_mobile.html`).
 
 ## Droits des personnes (RGPD)
 

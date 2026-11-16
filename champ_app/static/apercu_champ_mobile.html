@@ -256,6 +256,26 @@
   .alert-zone{ font-family:'IBM Plex Mono', monospace; font-size:16px; }
   .alert-desc{ font-size:11px; color: var(--sage); margin-top:2px; }
   .alert-val{ font-family:'IBM Plex Mono', monospace; font-size:18px; color: var(--critical); }
+  .alert-row.warning{ border-left-color: var(--stress); }
+  .alert-row.warning .alert-val{ color: var(--stress); }
+  .alert-tag{
+    display:inline-block; margin-left:8px; padding:1px 6px; border-radius:2px;
+    font-family:'IBM Plex Mono', monospace; font-size:9px; letter-spacing:.04em; text-transform:uppercase;
+    background: var(--surface-raised); color: var(--sage); vertical-align:middle;
+  }
+  .alert-tag.done{ color: var(--healthy); }
+  .alert-more{ font-size:11px; color: var(--sage); text-align:center; margin-top:4px; }
+  .empty-state{
+    padding:22px 16px; text-align:center; font-size:13px; line-height:1.5;
+    color: var(--sage); background: var(--surface); border-radius:4px;
+  }
+  .tap-info .big-action{ margin-top:10px; padding:12px; font-size:13px; }
+  .refresh-note{
+    display:none; background: var(--surface-raised); color: var(--sage);
+    font-size:11px; line-height:1.4; text-align:center; padding:7px 14px;
+    border-bottom:1px solid var(--line);
+  }
+  .refresh-note.show{ display:block; }
 
   .section-label{
     font-family:'IBM Plex Mono', monospace;
@@ -315,13 +335,14 @@
     Ne l'utilisez pas pour décider d'un traitement.
   </div>
   <div class="quality-banner" id="quality-banner" role="status"></div>
+  <div class="refresh-note" id="refresh-note" role="status"></div>
 
   <!-- POSITION TAB -->
   <div class="screen" id="screen-position">
     <div class="gps-card">
       <div class="gps-label">Vous êtes ici</div>
       <div class="gps-zone" id="pos-zone">C4</div>
-      <div class="gps-crop">Blé tendre — stade montaison</div>
+      <div class="gps-crop" id="pos-crop">Culture de démonstration</div>
       <div class="gps-metrics">
         <div><div class="gps-metric-val" id="pos-ndvi">—</div><div class="gps-metric-name">NDVI</div></div>
         <div><div class="gps-metric-val" id="pos-ndre">—</div><div class="gps-metric-name">NDRE</div></div>
@@ -352,7 +373,7 @@
   <div class="navbar">
     <button class="nav-btn" data-tab="position">📍 <span>Ma position</span></button>
     <button class="nav-btn active" data-tab="map">▦ <span>Carte</span></button>
-    <button class="nav-btn" data-tab="alerts">! <span>Alertes<div class="nav-dot show" id="nav-dot"></div></span></button>
+    <button class="nav-btn" data-tab="alerts">! <span>Alertes<div class="nav-dot" id="nav-dot"></div></span></button>
   </div>
 
 </div>
@@ -424,10 +445,31 @@ let labelGrid = null;  // mode live : raster basse résolution {rows, cols, data
 let zones = [];        // mode live : liste des zones k-means {id, ndvi, ndre, status}
 let currentCell = null;
 let currentAnalysisId = null;
+let selectedZone = null;          // zone TOUCHÉE sur la carte (distincte de currentCell, la « position » simulée)
+let treatedZones = new Set();     // ids des zones déjà marquées traitées pour l'analyse affichée
+const TREAT_LABEL = 'Marquer cette zone comme traitée';
 let isBlobMap = false;
 let dataSource = 'demo';
 let dataQuality = null;     // result.data_quality de l'analyse affichée (ratio de pixels exploitables)
 let analysisDate = null;   // date de l'analyse affichée (JJ/MM/AAAA), null en mode démo local
+
+function formatIsoDate(iso){
+  // « 2026-11-05 » -> « 05/11/2026 »
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
+  return m ? m[3] + '/' + m[2] + '/' + m[1] : null;
+}
+
+function showRefreshNote(analysis){
+  const note = document.getElementById('refresh-note');
+  if(analysis.reused){
+    const day = formatIsoDate(analysis.parameters && analysis.parameters.acquisition_date);
+    note.textContent = 'Déjà à jour : l’analyse' + (day ? ' du ' + day : '') + ' est la plus récente. De nouvelles données simulées seront disponibles demain.';
+    note.classList.add('show');
+  } else {
+    note.textContent = '';
+    note.classList.remove('show');
+  }
+}
 
 function formatAnalysisDate(value){
   // created_at vient de SQLite : "YYYY-MM-DD HH:MM:SS" (UTC)
@@ -437,6 +479,7 @@ function formatAnalysisDate(value){
 }
 
 function useAnalysis(analysis){
+  resetSelection();
   const data = analysis.result;
   if(!data.label_grid) throw new Error('Cette analyse ne contient pas de carte K-means.');
   labelGrid = data.label_grid;
@@ -452,6 +495,7 @@ function useAnalysis(analysis){
 }
 
 function useDemoData(){
+  resetSelection();
   cells = generateSyntheticCells();
   isBlobMap = false;
   dataSource = 'demo';
@@ -495,6 +539,7 @@ async function loadFieldData(){
       const analyses = await analysesRes.json();
       document.querySelector('.field-title').textContent = field.name;
       document.querySelector('.field-sub').textContent = `${field.crop} · ${field.area_ha} ha`;
+      document.getElementById('pos-crop').textContent = field.crop;   // avant : un texte de culture écrit en dur
 
       const latestMapAnalysis = analyses.find(analysis => analysis.result && analysis.result.label_grid);
       if(latestMapAnalysis){
@@ -529,11 +574,14 @@ async function refreshAnalysis(){
       body: JSON.stringify({ source: 'synthetic', method: 'kmeans', n_zones: 6 })
     });
     if(!res.ok) throw new Error(await describeApiError(res));
-    useAnalysis(await res.json());
+    const analysis = await res.json();
+    useAnalysis(analysis);
     updateSourceBadge();
     renderPosition();
     renderMap();
     renderAlerts();
+    showRefreshNote(analysis);
+    await loadTreatments();
   } catch(err){
     alert("Impossible de lancer l'analyse : " + err.message);
   } finally {
@@ -546,6 +594,10 @@ const colorStops = [
   {t:0, c:[196,98,58]}, {t:0.4, c:[217,164,65]}, {t:0.7, c:[159,187,108]}, {t:1, c:[111,160,89]}
 ];
 function lerpColor(v){
+  // Hors de l'échelle (NDVI négatif : eau, ombre, nuage), on retient l'extrémité la plus proche.
+  // Avant, la boucle ne trouvait aucun intervalle et renvoyait la couleur la plus SAINE (vert).
+  const lo = colorStops[0].t, hi = colorStops[colorStops.length-1].t;
+  v = Math.min(hi, Math.max(lo, v));
   for(let i=0;i<colorStops.length-1;i++){
     const a = colorStops[i], b = colorStops[i+1];
     if(v >= a.t && v <= b.t){
@@ -656,10 +708,78 @@ function renderMap(){
 function onMapTap(zone, el){
   document.querySelectorAll('.cell.tapped').forEach(c=>c.classList.remove('tapped'));
   el.classList.add('tapped');
+  selectedZone = zone;
   const info = document.getElementById('tap-info');
   const reco = recommendationFor(zone);
-  info.innerHTML = `<b>${escapeHtml(zone.id)}</b> — NDVI ${formatIndex(zone.ndvi)} · NDRE ${formatIndex(zone.ndre)}<br>${escapeHtml(reco.text)}`;
+  // le bouton agit sur la zone TOUCHÉE (avant, « Marquer comme traitée » visait toujours la zone centrale)
+  info.innerHTML = `<b>${escapeHtml(zone.id)}</b> — NDVI ${formatIndex(zone.ndvi)} · NDRE ${formatIndex(zone.ndre)}<br>${escapeHtml(reco.text)}<button class="big-action" id="tap-mark"></button>`;
   info.classList.add('show');
+  const tapButton = document.getElementById('tap-mark');
+  tapButton.addEventListener('click', ()=> markZoneTreated(selectedZone, tapButton));
+  refreshTreatmentButtons();
+}
+
+function resetSelection(){
+  selectedZone = null;
+  treatedZones = new Set();
+  const info = document.getElementById('tap-info');
+  if(info){ info.innerHTML = ''; info.classList.remove('show'); }
+}
+
+function zoneIsTreatable(zone){
+  return !!zone && zone.status !== 'no_data' && zone.ndvi != null;
+}
+
+function setTreatmentButton(button, zone){
+  // Reflète l'état RÉEL de la zone concernée. Avant, le bouton restait bloqué sur « marquée ✓ »
+  // après une première zone, quelle que soit la zone ou l'analyse affichée ensuite.
+  button.classList.remove('done');
+  if(!zone){ button.disabled = true; button.textContent = TREAT_LABEL; return; }
+  if(!currentAnalysisId){ button.disabled = true; button.textContent = 'Disponible après une analyse enregistrée'; return; }
+  if(!zoneIsTreatable(zone)){ button.disabled = true; button.textContent = 'Zone hors parcelle : rien à traiter'; return; }
+  if(treatedZones.has(zone.id)){ button.disabled = true; button.classList.add('done'); button.textContent = 'Zone marquée comme traitée ✓'; return; }
+  button.disabled = false;
+  button.textContent = TREAT_LABEL;
+}
+
+function refreshTreatmentButtons(){
+  setTreatmentButton(markBtn, currentCell);
+  const tapButton = document.getElementById('tap-mark');
+  if(tapButton) setTreatmentButton(tapButton, selectedZone);
+  renderAlerts();
+}
+
+async function loadTreatments(){
+  treatedZones = new Set();
+  if(FIELD_ID && TOKEN && currentAnalysisId){
+    try{
+      const res = await fetch(`${API_BASE}/fields/${FIELD_ID}/treatments`, { headers: { 'Authorization': 'Bearer ' + TOKEN } });
+      if(res.ok){
+        (await res.json()).filter(t => t.analysis_id === currentAnalysisId).forEach(t => treatedZones.add(t.zone_id));
+      }
+    } catch(err){
+      console.warn('Traitements non chargés :', err.message);
+    }
+  }
+  refreshTreatmentButtons();
+}
+
+async function markZoneTreated(zone, button){
+  if(!zoneIsTreatable(zone) || !FIELD_ID || !TOKEN || !currentAnalysisId) return;
+  button.disabled = true;
+  button.textContent = 'Enregistrement…';
+  try{
+    const res = await fetch(`${API_BASE}/fields/${FIELD_ID}/treatments`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ analysis_id: currentAnalysisId, zone_id: zone.id })
+    });
+    if(!res.ok) throw new Error(await describeApiError(res));
+    treatedZones.add(zone.id);
+  } catch(err){
+    alert('Impossible d’enregistrer le traitement : ' + err.message);
+  }
+  refreshTreatmentButtons();   // remet les boutons dans leur état réel, succès ou échec
 }
 
 // ---- render alerts tab ----
@@ -667,25 +787,47 @@ function renderAlerts(){
   const alertsEl = document.getElementById('alerts-list');
   alertsEl.innerHTML = '';
   const source = isBlobMap ? zones.filter(z => z.ndvi != null) : cells;
-  const worst = [...source].sort((a,b)=> a.ndvi-b.ndvi).slice(0,5);
-  worst.forEach(c=>{
+  // Seules les VRAIES alertes (zones critiques ou à surveiller) : avant, les 5 zones les plus basses
+  // étaient listées même quand toutes étaient saines (« Vigueur satisfaisante » sous un titre d'alerte).
+  const rank = { critical: 0, warning: 1 };
+  const alerts = source
+    .map(c => ({ c, level: recommendationFor(c).level }))
+    .filter(a => a.level !== 'ok')
+    .sort((a, b) => rank[a.level] - rank[b.level] || a.c.ndvi - b.c.ndvi);
+  const dot = document.getElementById('nav-dot');
+  if(dot) dot.classList.toggle('show', alerts.length > 0);   // le point rouge n'apparaît que s'il y a une alerte
+
+  if(!alerts.length){
+    alertsEl.innerHTML = '<div class="empty-state">Aucune alerte : toutes les zones analysées sont dans la normale.</div>';
+    return;
+  }
+  const MAX_SHOWN = 8;
+  alerts.slice(0, MAX_SHOWN).forEach(({ c, level }) => {
     const row = document.createElement('div');
-    row.className = 'alert-row';
+    row.className = 'alert-row' + (level === 'warning' ? ' warning' : '');
+    const treated = treatedZones.has(c.id) ? '<span class="alert-tag done">traitée ✓</span>' : '';
     row.innerHTML = `
       <div>
-        <div class="alert-zone">${escapeHtml(c.id)}</div>
+        <div class="alert-zone">${escapeHtml(c.id)}<span class="alert-tag">${level === 'critical' ? 'critique' : 'à surveiller'}</span>${treated}</div>
         <div class="alert-desc">${escapeHtml(recommendationFor(c).text)}</div>
       </div>
       <div class="alert-val">${formatIndex(c.ndvi)}</div>
     `;
     alertsEl.appendChild(row);
   });
+  if(alerts.length > MAX_SHOWN){
+    const more = document.createElement('div');
+    more.className = 'alert-more';
+    more.textContent = '… et ' + (alerts.length - MAX_SHOWN) + ' autre(s) zone(s).';
+    alertsEl.appendChild(more);
+  }
 }
 
-loadFieldData().then(()=>{
+loadFieldData().then(async ()=>{
   renderPosition();
   renderMap();
   renderAlerts();
+  await loadTreatments();
 });
 
 document.getElementById('refresh-analysis').addEventListener('click', refreshAnalysis);
@@ -712,32 +854,7 @@ offlineToggle.addEventListener('click', ()=>{
 
 // ---- mark treated ----
 const markBtn = document.getElementById('mark-treated');
-markBtn.addEventListener('click', async ()=>{
-  if(!FIELD_ID || !TOKEN || !currentAnalysisId){
-    alert('Lancez d’abord une analyse enregistrée pour confirmer un traitement.');
-    return;
-  }
-
-  markBtn.disabled = true;
-  markBtn.textContent = 'Enregistrement…';
-  try{
-    const res = await fetch(`${API_BASE}/fields/${FIELD_ID}/treatments`, {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Bearer ' + TOKEN,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ analysis_id: currentAnalysisId, zone_id: currentCell.id })
-    });
-    if(!res.ok) throw new Error(await describeApiError(res));
-    markBtn.textContent = 'Zone marquée comme traitée ✓';
-    markBtn.classList.add('done');
-  } catch(err){
-    alert('Impossible d’enregistrer le traitement : ' + err.message);
-    markBtn.disabled = false;
-    markBtn.textContent = 'Marquer cette zone comme traitée';
-  }
-});
+markBtn.addEventListener('click', ()=> markZoneTreated(currentCell, markBtn));
 
 // enregistrement du service worker (condition d'installabilité PWA sur Android/Chrome)
 if ("serviceWorker" in navigator) {

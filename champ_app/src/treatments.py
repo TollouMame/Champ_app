@@ -35,6 +35,22 @@ def save_treatment(
         if normalized_zone_id not in known_zone_ids:
             raise TreatmentError("Cette zone n'existe pas dans le résultat de cette analyse.")
 
+        zone = next(z for z in result["zones"] if z["id"] == normalized_zone_id)
+        if zone.get("status") == "no_data" or ("ndvi" in zone and zone["ndvi"] is None):
+            raise TreatmentError(
+                "Cette zone est hors de la parcelle ou sans donnée exploitable : "
+                "elle ne peut pas être marquée comme traitée."
+            )
+
+        # Idempotent : marquer deux fois la même zone d'une même analyse ne crée pas de doublon
+        # (double clic, deux appareils, nouvelle tentative après une coupure réseau).
+        existing = conn.execute(
+            "SELECT * FROM zone_treatments WHERE field_id = ? AND analysis_id = ? AND zone_id = ? ORDER BY id LIMIT 1",
+            (field_id, analysis_id, normalized_zone_id),
+        ).fetchone()
+        if existing is not None:
+            return {**dict(existing), "already_recorded": True}
+
         cursor = conn.execute(
             """INSERT INTO zone_treatments (field_id, analysis_id, zone_id, note)
                VALUES (?, ?, ?, ?)""",
@@ -42,7 +58,7 @@ def save_treatment(
         )
         conn.commit()
         row = conn.execute("SELECT * FROM zone_treatments WHERE id = ?", (cursor.lastrowid,)).fetchone()
-        return dict(row)
+        return {**dict(row), "already_recorded": False}
     finally:
         conn.close()
 

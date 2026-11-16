@@ -6,6 +6,29 @@ from pathlib import Path
 from src.db import get_connection
 
 
+def _dump(value) -> str:
+    # allow_nan=False : un NaN ne doit jamais être persisté (il rendrait ensuite toute la
+    # liste d'analyses du champ illisible en JSON)
+    return json.dumps(value, ensure_ascii=False, allow_nan=False)
+
+
+def find_identical_analysis(
+    db_path: str | Path, field_id: int, source: str, method: str, parameters: dict
+) -> dict | None:
+    """Dernière analyse du champ obtenue avec exactement les mêmes source, méthode et paramètres."""
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute(
+            """SELECT * FROM analyses
+               WHERE field_id = ? AND source = ? AND method = ? AND parameters_json = ?
+               ORDER BY id DESC LIMIT 1""",
+            (field_id, source, method, _dump(parameters)),
+        ).fetchone()
+        return _decode_analysis(dict(row)) if row else None
+    finally:
+        conn.close()
+
+
 def save_analysis(
     db_path: str | Path,
     field_id: int,
@@ -24,10 +47,8 @@ def save_analysis(
                 field_id,
                 source,
                 method,
-                # allow_nan=False : un NaN ne doit jamais être persisté (il rendrait
-                # ensuite toute la liste d'analyses du champ illisible en JSON)
-                json.dumps(parameters, ensure_ascii=False, allow_nan=False),
-                json.dumps(result, ensure_ascii=False, allow_nan=False),
+                _dump(parameters),
+                _dump(result),
             ),
         )
         conn.commit()

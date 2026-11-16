@@ -72,9 +72,10 @@ def test_analysis_quota_per_field(client, monkeypatch):
     monkeypatch.setattr(api, "MAX_ANALYSES_PER_FIELD", 2)
     field_id = _small_field_id(client)
     url = f"/fields/{field_id}/analyses"
-    assert client.post(url, json={}).status_code == 200
-    assert client.post(url, json={}).status_code == 200
-    blocked = client.post(url, json={})
+    # des dates différentes : une analyse de démonstration identique est RÉUTILISÉE, pas recréée
+    assert client.post(url, json={"acquisition_date": "2026-03-01"}).status_code == 200
+    assert client.post(url, json={"acquisition_date": "2026-03-02"}).status_code == 200
+    blocked = client.post(url, json={"acquisition_date": "2026-03-03"})
     assert blocked.status_code == 429
     assert blocked.json()["detail"]["error"] == "analysis_quota_exceeded"
     assert len(client.get(url).json()) == 2           # l'historique existant reste consultable
@@ -98,7 +99,7 @@ def test_analysis_rate_limit(client, monkeypatch):
 def test_analyses_list_is_paginated_newest_first(client):
     field_id = _small_field_id(client)
     url = f"/fields/{field_id}/analyses"
-    ids = [client.post(url, json={}).json()["id"] for _ in range(5)]
+    ids = [client.post(url, json={"acquisition_date": f"2026-03-0{day}"}).json()["id"] for day in range(1, 6)]
 
     assert [a["id"] for a in client.get(url, params={"limit": 2}).json()] == [ids[4], ids[3]]
     assert [a["id"] for a in client.get(url, params={"limit": 2, "offset": 2}).json()] == [ids[2], ids[1]]
